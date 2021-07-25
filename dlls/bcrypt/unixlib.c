@@ -130,13 +130,19 @@ static void CDECL key_asymmetric_destroy( struct key *key )
 }
 
 static NTSTATUS CDECL key_asymmetric_decrypt( struct key *key, UCHAR *input, ULONG input_len,
-        UCHAR *output, ULONG *output_len, ULONG *ret_len )
+        UCHAR *output, ULONG *output_len )
 {
     FIXME( "not implemented\n" );
     return STATUS_NOT_IMPLEMENTED;
 }
 
 static NTSTATUS CDECL key_import_rsa( struct key *key, UCHAR *input, ULONG input_len )
+{
+    FIXME( "not implemented\n" );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+static NTSTATUS CDECL key_secret_agreement( struct key *priv_key, struct key *peer_key, struct secret *secret )
 {
     FIXME( "not implemented\n" );
     return STATUS_NOT_IMPLEMENTED;
@@ -170,14 +176,15 @@ static struct key_funcs key_funcs =
     key_import_dsa_capi,
     key_import_ecc,
     key_import_rsa,
+    key_secret_agreement,
     key_compute_secret_ecc,
 };
 
 NTSTATUS CDECL __wine_init_unix_lib( HMODULE module, DWORD reason, const void *ptr_in, void *ptr_out )
 {
-    struct key_funcs *gnutls_funcs = gnutls_lib_init(reason);
-    struct key_funcs *macos_funcs = macos_lib_init(reason);
-    struct key_funcs *gcrypt_funcs = gcrypt_lib_init(reason);
+    const struct key_funcs *gnutls_funcs = gnutls_lib_init(reason);
+    const struct key_funcs *macos_funcs = macos_lib_init(reason);
+    const struct key_funcs *gcrypt_funcs = gcrypt_lib_init(reason);
 
     if (reason == DLL_PROCESS_ATTACH)
     {
@@ -209,6 +216,7 @@ NTSTATUS CDECL __wine_init_unix_lib( HMODULE module, DWORD reason, const void *p
         RESOLVE_FUNC(import_dsa_capi)
         RESOLVE_FUNC(import_ecc)
         RESOLVE_FUNC(import_rsa)
+        RESOLVE_FUNC(secret_agreement)
         RESOLVE_FUNC(compute_secret_ecc)
 
 #undef RESOLVE_FUNC
