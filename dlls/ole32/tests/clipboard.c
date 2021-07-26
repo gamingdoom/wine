@@ -503,13 +503,27 @@ static HRESULT DataObjectImpl_CreateComplex(LPDATAOBJECT *lplpdataobj)
 
 static void test_get_clipboard_uninitialized(void)
 {
-    HRESULT hr;
+    REFCLSID rclsid = &CLSID_InternetZoneManager;
     IDataObject *pDObj;
+    IUnknown *pUnk;
+    HRESULT hr;
 
     pDObj = (IDataObject *)0xdeadbeef;
     hr = OleGetClipboard(&pDObj);
-    todo_wine ok(hr == S_OK, "OleGetClipboard() got 0x%08x instead of 0x%08x\n", hr, S_OK);
-    if (pDObj && pDObj != (IDataObject *)0xdeadbeef) IDataObject_Release(pDObj);
+    ok(hr == S_OK, "OleGetClipboard() got 0x%08x instead of 0x%08x\n", hr, S_OK);
+    ok(!!pDObj && pDObj != (IDataObject *)0xdeadbeef, "Got unexpected pDObj %p.\n", pDObj);
+
+    /* COM is still not initialized. */
+    hr = CoCreateInstance(rclsid, NULL, 0x17, &IID_IUnknown, (void **)&pUnk);
+    ok(hr == CO_E_NOTINITIALIZED, "Got unexpected hr %#x.\n", hr);
+
+    hr = OleFlushClipboard();
+    ok(hr == E_FAIL, "Got unexpected hr %#x.\n", hr);
+
+    hr = OleIsCurrentClipboard(pDObj);
+    ok(hr == S_FALSE, "Got unexpected hr %#x.\n", hr);
+
+    IDataObject_Release(pDObj);
 }
 
 static void test_get_clipboard(void)
@@ -1275,7 +1289,7 @@ static void test_consumer_refs(void)
     IDataObject_Release(src2);
 
     /* Show that OleUninitialize() doesn't release the
-       dataobject's ref, and thus the object is leaked. */
+       dataobject's ref and the object is leaked. */
     old_refs = count_refs(src);
     ok(old_refs == 1, "%d\n", old_refs);
 
@@ -1285,6 +1299,15 @@ static void test_consumer_refs(void)
     ok(refs > old_refs, "%d %d\n", refs, old_refs);
 
     OleUninitialize();
+    refs = count_refs(src);
+    ok(refs == 2, "%d\n", refs);
+
+    OleInitialize(NULL);
+    hr = OleSetClipboard(NULL);
+    ok(hr == S_OK, "Failed to clear clipboard, hr %#x.\n", hr);
+
+    OleUninitialize();
+
     refs = count_refs(src);
     ok(refs == 2, "%d\n", refs);
 
