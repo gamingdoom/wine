@@ -1377,6 +1377,7 @@ static void sync_client_position( struct x11drv_win_data *data,
         TRACE( "setting client win %lx pos %d,%d,%dx%d changes=%x\n",
                data->client_window, changes.x, changes.y, changes.width, changes.height, mask );
         XConfigureWindow( data->display, data->client_window, mask, &changes );
+        resize_vk_surfaces( data->hwnd, data->client_window, mask, &changes );
     }
 }
 
@@ -1478,6 +1479,23 @@ static Window get_dummy_parent(void)
         XMapWindow( gdi_display, dummy_parent );
     }
     return dummy_parent;
+}
+
+
+/**********************************************************************
+ *		destroy_client_window
+ */
+void destroy_client_window( HWND hwnd, Window old_window, Window new_window )
+{
+    struct x11drv_win_data *data;
+    if ((data = get_win_data( hwnd )))
+    {
+        if (data->client_window == old_window) data->client_window = new_window;
+        /* make sure any request that could use old_window has been flushed */
+        XFlush( data->display );
+        release_win_data( data );
+    }
+    XDestroyWindow( gdi_display, old_window );
 }
 
 
@@ -1743,6 +1761,15 @@ void CDECL X11DRV_SetWindowStyle( HWND hwnd, INT offset, STYLESTRUCT *style )
 {
     struct x11drv_win_data *data;
     DWORD changed = style->styleNew ^ style->styleOld;
+    HWND parent = GetAncestor( hwnd, GA_PARENT );
+
+    if (offset == GWL_STYLE && (changed & WS_CHILD))
+    {
+        if (GetWindow( parent, GW_CHILD ) || GetAncestor( parent, GA_PARENT ) != GetDesktopWindow())
+            sync_vk_surface( parent, TRUE );
+        else
+            sync_vk_surface( parent, FALSE );
+    }
 
     if (hwnd == GetDesktopWindow()) return;
     if (!(data = get_win_data( hwnd ))) return;
@@ -1769,6 +1796,10 @@ void CDECL X11DRV_DestroyWindow( HWND hwnd )
 {
     struct x11drv_thread_data *thread_data = x11drv_thread_data();
     struct x11drv_win_data *data;
+    HWND parent = GetAncestor( hwnd, GA_PARENT );
+
+    if (!GetWindow( parent, GW_CHILD ) && GetAncestor( parent, GA_PARENT ) == GetDesktopWindow())
+        sync_vk_surface( parent, FALSE );
 
     if (!(data = get_win_data( hwnd ))) return;
 
@@ -1975,6 +2006,7 @@ static struct x11drv_win_data *X11DRV_create_win_data( HWND hwnd, const RECT *wi
      * that will need clipping support.
      */
     sync_gl_drawable( parent, TRUE );
+    sync_vk_surface( parent, TRUE );
 
     display = thread_init_display();
     init_clip_window();  /* make sure the clip window is initialized in this thread */
@@ -2252,54 +2284,6 @@ BOOL CDECL X11DRV_ScrollDC( HDC hdc, INT dx, INT dy, HRGN update )
 
 
 /***********************************************************************
- *		SetActiveWindow  (X11DRV.@)
- */
-void CDECL X11DRV_SetActiveWindow( HWND hwnd )
-{
-    struct x11drv_thread_data *thread_data = x11drv_init_thread_data();
-    struct x11drv_win_data *data;
-
-    TRACE("%p\n", hwnd);
-
-    if (thread_data->active_window == hwnd)
-    {
-        TRACE("ignoring activation for already active window %p\n", hwnd);
-        return;
-    }
-
-    if (!(data = get_win_data( hwnd ))) return;
-
-    if (data->mapped && data->managed)
-    {
-        XEvent xev;
-        struct x11drv_win_data *active = get_win_data( thread_data->active_window );
-        DWORD timestamp = GetMessageTime() - EVENT_x11_time_to_win32_time( 0 );
-
-        TRACE("setting _NET_ACTIVE_WINDOW to %p/%lx, current active %p/%lx\n",
-            data->hwnd, data->whole_window, active ? active->hwnd : NULL, active ? active->whole_window : 0 );
-
-        xev.xclient.type = ClientMessage;
-        xev.xclient.window = data->whole_window;
-        xev.xclient.message_type = x11drv_atom(_NET_ACTIVE_WINDOW);
-        xev.xclient.serial = 0;
-        xev.xclient.display = data->display;
-        xev.xclient.send_event = True;
-        xev.xclient.format = 32;
-
-        xev.xclient.data.l[0] = 1; /* source: application */
-        xev.xclient.data.l[1] = timestamp;
-        xev.xclient.data.l[2] = active ? active->whole_window : 0;
-        xev.xclient.data.l[3] = 0;
-        xev.xclient.data.l[4] = 0;
-        XSendEvent( data->display, root_window, False, SubstructureRedirectMask | SubstructureNotifyMask, &xev );
-
-        if (active) release_win_data( active );
-    }
-
-    release_win_data( data );
-}
-
-/***********************************************************************
  *		SetCapture  (X11DRV.@)
  */
 void CDECL X11DRV_SetCapture( HWND hwnd, UINT flags )
@@ -2366,6 +2350,7 @@ done:
      * that will need clipping support.
      */
     sync_gl_drawable( parent, TRUE );
+    sync_vk_surface( parent, TRUE );
 
     fetch_icon_data( hwnd, 0, 0 );
 }
@@ -2883,6 +2868,9 @@ LRESULT CDECL X11DRV_WindowMessage( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         return clip_cursor_notify( hwnd, (HWND)wp, (HWND)lp );
     case WM_X11DRV_CLIP_CURSOR_REQUEST:
         return clip_cursor_request( hwnd, (BOOL)wp, (BOOL)lp );
+    case WM_X11DRV_DROPEVENT:
+        X11DRV_XDND_DropEventProcess( hwnd );
+        return 0;
     default:
         FIXME( "got window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, wp, lp );
         return 0;
