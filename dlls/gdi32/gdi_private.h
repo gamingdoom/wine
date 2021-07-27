@@ -46,4 +46,7 @@ extern BOOL METADC_MoveTo( HDC hdc, INT x, INT y ) DECLSPEC_HIDDEN;
 extern BOOL METADC_Pie( HDC hdc, INT left, INT top, INT right, INT bottom,
                         INT xstart, INT ystart, INT xend, INT yend ) DECLSPEC_HIDDEN;
 
+BOOL xform_has_rotate_and_uniform_scale_and_shear( const XFORM *xform ) DECLSPEC_HIDDEN;
+BOOL xform_decompose_rotation_and_translation( XFORM *xform, XFORM *rotation_and_translation ) DECLSPEC_HIDDEN;
+
 #endif /* __WINE_GDI_PRIVATE_H */
