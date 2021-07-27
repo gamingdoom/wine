@@ -246,6 +246,7 @@ static const struct object_ops sock_ops =
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
     NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     sock_get_fd,                  /* get_fd */
@@ -1028,7 +1029,7 @@ static void sock_poll_event( struct fd *fd, int event )
         fprintf(stderr, "socket %p select event: %x\n", sock, event);
 
     /* we may change event later, remove from loop here */
-    if (event & (POLLERR|POLLHUP)) set_fd_events( sock->fd, -1 );
+    if (event & (POLLERR|POLLHUP) && sock->state != SOCK_LISTENING) set_fd_events( sock->fd, -1 );
 
     switch (sock->state)
     {
@@ -1200,6 +1201,10 @@ static int sock_get_poll_events( struct fd *fd )
         else if (!sock->wr_shutdown && (mask & AFD_POLL_WRITE))
         {
             ev |= POLLOUT;
+        }
+        if (sock->rd_shutdown && sock->wr_shutdown && ev == 0)
+        {
+            ev = -1;
         }
 
         break;
@@ -2888,6 +2893,7 @@ static const struct object_ops ifchange_ops =
     NULL,                    /* remove_queue */
     NULL,                    /* signaled */
     NULL,                    /* get_esync_fd */
+    NULL,                    /* get_fsync_idx */
     no_satisfied,            /* satisfied */
     no_signal,               /* signal */
     ifchange_get_fd,         /* get_fd */
@@ -3109,6 +3115,7 @@ static const struct object_ops socket_device_ops =
     NULL,                       /* remove_queue */
     NULL,                       /* signaled */
     NULL,                       /* get_esync_fd */
+    NULL,                       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
