@@ -2040,6 +2040,12 @@ INT WINAPI WS_getsockopt(SOCKET s, INT level,
           debugstr_sockopt(level, optname), debugstr_optval(optval, 0),
           optlen, optlen ? *optlen : 0);
 
+    if (!socket_list_find( s ))
+    {
+        SetLastError( WSAENOTSOCK );
+        return -1;
+    }
+
     switch(level)
     {
     case WS_SOL_SOCKET:
