@@ -34,6 +34,7 @@
 
 #include "kernelbase.h"
 #include "wine/debug.h"
+#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(process);
 
@@ -569,9 +570,60 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
     }
     else
     {
-        if (!(tidy_cmdline = get_file_name( cmd_line, name, ARRAY_SIZE(name) ))) return FALSE;
+        static const WCHAR *opt = L" --use-gl=swiftshader";
+        WCHAR *cmdline_new = NULL;
+
+        if (cmd_line && wcsstr( cmd_line, L"UplayWebCore.exe" ))
+        {
+            FIXME( "HACK: appending %s to command line %s.\n", debugstr_w(opt), debugstr_w(cmd_line) );
+
+            cmdline_new = heap_alloc( sizeof(WCHAR) * (lstrlenW(cmd_line) + lstrlenW(opt) + 1) );
+            lstrcpyW(cmdline_new, cmd_line);
+            lstrcatW(cmdline_new, opt);
+        }
+
+        tidy_cmdline = get_file_name( cmdline_new ? cmdline_new : cmd_line, name, ARRAY_SIZE(name) );
+
+        if (!tidy_cmdline)
+        {
+            heap_free( cmdline_new );
+            return FALSE;
+        }
+
+        if (cmdline_new)
+        {
+            if (cmdline_new == tidy_cmdline) cmd_line = NULL;
+            else heap_free( cmdline_new );
+        }
         app_name = name;
     }
+
+    /* CROSSOVER HACK: bug 13322 (winehq bug 39403)
+     * Insert --no-sandbox in command line of Steam's web helper process to
+     * work around problems hooking our ntdll exports. */
+    {
+        static const WCHAR steamwebhelperexeW[] = {'s','t','e','a','m','w','e','b','h','e','l','p','e','r','.','e','x','e',0};
+        static const WCHAR nosandboxW[] = {' ','-','-','n','o','-','s','a','n','d','b','o','x',0};
+
+        if (StrStrW(name, steamwebhelperexeW))
+        {
+            LPWSTR new_command_line;
+
+            new_command_line = HeapAlloc(GetProcessHeap(), 0,
+                sizeof(WCHAR) * (lstrlenW(tidy_cmdline) + lstrlenW(nosandboxW) + 1));
+
+            if (!new_command_line) return FALSE;
+
+            lstrcpyW(new_command_line, tidy_cmdline);
+            lstrcatW(new_command_line, nosandboxW);
+
+            TRACE("CrossOver hack changing command line to %s\n", debugstr_w(new_command_line));
+
+            if (tidy_cmdline != cmd_line) HeapFree( GetProcessHeap(), 0, tidy_cmdline );
+            tidy_cmdline = new_command_line;
+        }
+    }
+    /* end CROSSOVER HACK */
 
     /* Warn if unsupported features are used */
 

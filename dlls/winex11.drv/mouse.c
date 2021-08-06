@@ -509,6 +509,8 @@ static BOOL grab_clipping_window( const RECT *clip )
     Window clip_window;
     HWND msg_hwnd = 0;
     POINT pos;
+    RECT virtual_rect = get_virtual_screen_rect();
+    if (!EqualRect(clip, &virtual_rect)) reset_clipping_window();
 
     if (GetWindowThreadProcessId( GetDesktopWindow(), NULL ) == GetCurrentThreadId())
         return TRUE;  /* don't clip in the desktop process */
@@ -1675,6 +1677,13 @@ BOOL CDECL X11DRV_ClipCursor( LPCRECT clip )
     {
         HWND foreground = GetForegroundWindow();
         DWORD tid, pid;
+
+        if (foreground == GetDesktopWindow())
+        {
+            WARN( "desktop is foreground, ignoring ClipCursor\n" );
+            ungrab_clipping_window();
+            return TRUE;
+        }
 
         /* forward request to the foreground window if it's in a different thread */
         tid = GetWindowThreadProcessId( foreground, &pid );

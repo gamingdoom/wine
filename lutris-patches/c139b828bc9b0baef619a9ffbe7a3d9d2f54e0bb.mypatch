@@ -1,0 +1,124 @@
+From c139b828bc9b0baef619a9ffbe7a3d9d2f54e0bb Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 30 Jul 2021 15:37:15 +0300
+Subject: [PATCH] jscript: Store the head of statement list instead of the list
+ structure.
+
+CW-Bug-ID: 19151
+---
+ dlls/jscript/compile.c |  6 +++---
+ dlls/jscript/parser.h  |  9 ++-------
+ dlls/jscript/parser.y  | 14 +++++++-------
+ 3 files changed, 12 insertions(+), 17 deletions(-)
+
+diff --git a/dlls/jscript/compile.c b/dlls/jscript/compile.c
+index 7276c7f2b9c..5a3214c9dbd 100644
+--- a/dlls/jscript/compile.c
++++ b/dlls/jscript/compile.c
+@@ -2490,7 +2490,7 @@ static HRESULT init_code(compiler_ctx_t *compiler, const WCHAR *source, UINT64 s
+     return S_OK;
+ }
+ 
+-static HRESULT compile_function(compiler_ctx_t *ctx, statement_list_t *source, function_expression_t *func_expr,
++static HRESULT compile_function(compiler_ctx_t *ctx, statement_t *source, function_expression_t *func_expr,
+         BOOL from_eval, function_code_t *func)
+ {
+     function_expression_t *iter;
+@@ -2547,7 +2547,7 @@ static HRESULT compile_function(compiler_ctx_t *ctx, statement_list_t *source, f
+             return E_OUTOFMEMORY;
+     }
+ 
+-    hres = visit_block_statement(ctx, NULL, source ? source->head : NULL);
++    hres = visit_block_statement(ctx, NULL, source);
+     if(FAILED(hres))
+         return hres;
+ 
+@@ -2588,7 +2588,7 @@ static HRESULT compile_function(compiler_ctx_t *ctx, statement_list_t *source, f
+ 
+     ctx->current_function_expr = ctx->func_head;
+     off = ctx->code_off;
+-    hres = compile_block_statement(ctx, NULL, source ? source->head : NULL);
++    hres = compile_block_statement(ctx, NULL, source);
+     if(FAILED(hres))
+         return hres;
+ 
+diff --git a/dlls/jscript/parser.h b/dlls/jscript/parser.h
+index 737d8a6cae7..50db66b3cac 100644
+--- a/dlls/jscript/parser.h
++++ b/dlls/jscript/parser.h
+@@ -19,11 +19,6 @@
+ typedef struct _expression_t expression_t;
+ typedef struct _statement_t statement_t;
+ 
+-typedef struct _statement_list_t {
+-    statement_t *head;
+-    statement_t *tail;
+-} statement_list_t;
+-
+ struct _bytecode_t;
+ 
+ typedef struct {
+@@ -41,7 +36,7 @@ typedef struct _parser_ctx_t {
+ 
+     script_ctx_t *script;
+     struct _compiler_ctx_t *compiler;
+-    statement_list_t *source;
++    statement_t *source;
+     BOOL nl;
+     BOOL implicit_nl_semicolon;
+     BOOL is_html;
+@@ -301,7 +296,7 @@ typedef struct _function_expression_t {
+     const WCHAR *identifier;
+     const WCHAR *event_target;
+     parameter_t *parameter_list;
+-    statement_list_t *statement_list;
++    statement_t *statement_list;
+     const WCHAR *src_str;
+     DWORD src_len;
+     unsigned func_id;
+diff --git a/dlls/jscript/parser.y b/dlls/jscript/parser.y
+index caecc06e1f2..1218ae04832 100644
+--- a/dlls/jscript/parser.y
++++ b/dlls/jscript/parser.y
+@@ -65,6 +65,11 @@ typedef struct _case_list_t {
+     case_clausule_t *tail;
+ } case_list_t;
+ 
++typedef struct _statement_list_t {
++   statement_t *head;
++   statement_t *tail;
++} statement_list_t;
++
+ static catch_block_t *new_catch_block(parser_ctx_t*,const WCHAR*,statement_t*);
+ static case_clausule_t *new_case_clausule(parser_ctx_t*,unsigned,expression_t*,statement_list_t*);
+ static case_list_t *new_case_list(parser_ctx_t*,case_clausule_t*);
+@@ -98,11 +103,6 @@ static statement_t *new_switch_statement(parser_ctx_t*,unsigned,expression_t*,ca
+ static statement_t *new_throw_statement(parser_ctx_t*,unsigned,expression_t*);
+ static statement_t *new_try_statement(parser_ctx_t*,statement_t*,catch_block_t*,statement_t*,unsigned);
+ 
+-struct statement_list_t {
+-   statement_t *head;
+-   statement_t *tail;
+-};
+-
+ static statement_list_t *new_statement_list(parser_ctx_t*,statement_t*);
+ static statement_list_t *statement_list_add(statement_list_t*,statement_t*);
+ 
+@@ -249,7 +249,7 @@ static expression_t *new_prop_and_value_expression(parser_ctx_t*,property_list_t
+ 
+ /* ECMA-262 10th Edition    15.1 */
+ Script
+-       : ScriptBody HtmlComment { ctx->source = $1; }
++       : ScriptBody HtmlComment { ctx->source = $1 ? $1->head : NULL; }
+ 
+ /* ECMA-262 10th Edition    15.1 */
+ ScriptBody
+@@ -1440,7 +1440,7 @@ static expression_t *new_function_expression(parser_ctx_t *ctx, const WCHAR *ide
+ 
+     ret->identifier = identifier;
+     ret->parameter_list = parameter_list ? parameter_list->head : NULL;
+-    ret->statement_list = statement_list;
++    ret->statement_list = statement_list ? statement_list->head : NULL;
+     ret->event_target = event_target;
+     ret->src_str = src_str;
+     ret->src_len = src_len;

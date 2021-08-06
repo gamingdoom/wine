@@ -8706,4 +8706,6 @@ const struct unix_funcs loader_funcs =
     &wine_vkWaitSemaphores,
     &wine_vkWaitSemaphoresKHR,
     &wine_vkWriteAccelerationStructuresPropertiesKHR,
+    &wine_vk_is_available_instance_function,
+    &wine_vk_is_available_device_function,
 };
