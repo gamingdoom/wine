@@ -937,6 +937,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID reserved)
 	break;
 
     case DLL_PROCESS_DETACH:
+        OLEClipbrd_Destroy();
         if (reserved) break;
         release_std_git();
         break;

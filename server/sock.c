@@ -214,6 +214,8 @@ struct sock
     unsigned int        rd_shutdown : 1; /* is the read end shut down? */
     unsigned int        wr_shutdown : 1; /* is the write end shut down? */
     unsigned int        wr_shutdown_pending : 1; /* is a write shutdown pending? */
+    unsigned int        hangup : 1;  /* has the read end received a hangup? */
+    unsigned int        aborted : 1; /* did we get a POLLERR or irregular POLLHUP? */
     unsigned int        nonblocking : 1; /* is the socket nonblocking? */
     unsigned int        bound : 1;   /* is the socket bound? */
 };
@@ -246,6 +248,7 @@ static const struct object_ops sock_ops =
     remove_queue,                 /* remove_queue */
     default_fd_signaled,          /* signaled */
     NULL,                         /* get_esync_fd */
+    NULL,                         /* get_fsync_idx */
     no_satisfied,                 /* satisfied */
     no_signal,                    /* signal */
     sock_get_fd,                  /* get_fd */
@@ -942,7 +945,7 @@ static int sock_dispatch_asyncs( struct sock *sock, int event, int error )
         int status = sock_get_ntstatus( error );
         struct accept_req *req, *next;
 
-        if (sock->rd_shutdown)
+        if (sock->rd_shutdown || sock->hangup)
             async_wake_up( &sock->read_q, status );
         if (sock->wr_shutdown)
             async_wake_up( &sock->write_q, status );
@@ -1028,7 +1031,7 @@ static void sock_poll_event( struct fd *fd, int event )
         fprintf(stderr, "socket %p select event: %x\n", sock, event);
 
     /* we may change event later, remove from loop here */
-    if (event & (POLLERR|POLLHUP)) set_fd_events( sock->fd, -1 );
+    if (event & (POLLERR|POLLHUP) && sock->state != SOCK_LISTENING) set_fd_events( sock->fd, -1 );
 
     switch (sock->state)
     {
@@ -1084,15 +1087,16 @@ static void sock_poll_event( struct fd *fd, int event )
             }
         }
 
-        if ((hangup_seen || event & (POLLHUP | POLLERR)) && (!sock->rd_shutdown || !sock->wr_shutdown))
+        if (hangup_seen || (sock_shutdown_type == SOCK_SHUTDOWN_POLLHUP && (event & POLLHUP)))
         {
-            error = error ? error : sock_error( fd );
-            if ( (event & POLLERR) || ( sock_shutdown_type == SOCK_SHUTDOWN_EOF && (event & POLLHUP) ))
-                sock->wr_shutdown = 1;
-            sock->rd_shutdown = 1;
+            sock->hangup = 1;
+        }
+        else if (event & (POLLHUP | POLLERR))
+        {
+            sock->aborted = 1;
 
             if (debug_level)
-                fprintf(stderr, "socket %p aborted by error %d, event: %x\n", sock, error, event);
+                fprintf( stderr, "socket %p aborted by error %d, event %#x\n", sock, error, event );
         }
 
         if (hangup_seen)
@@ -1170,6 +1174,23 @@ static int sock_get_poll_events( struct fd *fd )
 
     case SOCK_CONNECTED:
     case SOCK_CONNECTIONLESS:
+        if (sock->hangup && sock->wr_shutdown && !sock->wr_shutdown_pending)
+        {
+            /* Linux returns POLLHUP if a socket is both SHUT_RD and SHUT_WR, or
+             * if both the socket and its peer are SHUT_WR.
+             *
+             * We don't use SHUT_RD, so we can only encounter this in the latter
+             * case. In that case there can't be any pending read requests (they
+             * would have already been completed with a length of zero), the
+             * above condition ensures that we don't have any pending write
+             * requests, and nothing that can change about the socket state that
+             * would complete a pending poll request. */
+            return -1;
+        }
+
+        if (sock->aborted)
+            return -1;
+
         if (sock->accept_recv_req)
         {
             ev |= POLLIN;
@@ -1180,7 +1201,9 @@ static int sock_get_poll_events( struct fd *fd )
         }
         else
         {
-            if (!sock->rd_shutdown)
+            /* Don't ask for POLLIN if we got a hangup. We won't receive more
+             * data anyway, but we will get POLLIN if SOCK_SHUTDOWN_EOF. */
+            if (!sock->hangup)
             {
                 if (mask & AFD_POLL_READ)
                     ev |= POLLIN;
@@ -1200,6 +1223,10 @@ static int sock_get_poll_events( struct fd *fd )
         else if (!sock->wr_shutdown && (mask & AFD_POLL_WRITE))
         {
             ev |= POLLOUT;
+        }
+        if (sock->rd_shutdown && sock->wr_shutdown && ev == 0)
+        {
+            ev = -1;
         }
 
         break;
@@ -1274,7 +1301,10 @@ static void sock_reselect_async( struct fd *fd, struct async_queue *queue )
     struct sock *sock = get_fd_user( fd );
 
     if (sock->wr_shutdown_pending && list_empty( &sock->write_q.queue ))
+    {
         shutdown( get_unix_fd( sock->fd ), SHUT_WR );
+        sock->wr_shutdown_pending = 0;
+    }
 
     /* Don't reselect the ifchange queue; we always ask for POLLIN.
      * Don't reselect an uninitialized socket; we can't call set_fd_events() on
@@ -1392,6 +1422,8 @@ static struct sock *create_socket(void)
     sock->rd_shutdown = 0;
     sock->wr_shutdown = 0;
     sock->wr_shutdown_pending = 0;
+    sock->hangup = 0;
+    sock->aborted = 0;
     sock->nonblocking = 0;
     sock->bound = 0;
     sock->rcvbuf = 0;
@@ -2888,6 +2920,7 @@ static const struct object_ops ifchange_ops =
     NULL,                    /* remove_queue */
     NULL,                    /* signaled */
     NULL,                    /* get_esync_fd */
+    NULL,                    /* get_fsync_idx */
     no_satisfied,            /* satisfied */
     no_signal,               /* signal */
     ifchange_get_fd,         /* get_fd */
@@ -3109,6 +3142,7 @@ static const struct object_ops socket_device_ops =
     NULL,                       /* remove_queue */
     NULL,                       /* signaled */
     NULL,                       /* get_esync_fd */
+    NULL,                       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
@@ -3183,7 +3217,8 @@ DECL_HANDLER(recv_socket)
         status = STATUS_PENDING;
     }
 
-    if (status == STATUS_PENDING && sock->rd_shutdown) status = STATUS_PIPE_DISCONNECTED;
+    if ((status == STATUS_PENDING || status == STATUS_DEVICE_NOT_READY) && sock->rd_shutdown)
+        status = STATUS_PIPE_DISCONNECTED;
 
     sock->pending_events &= ~(req->oob ? AFD_POLL_OOB : AFD_POLL_READ);
     sock->reported_events &= ~(req->oob ? AFD_POLL_OOB : AFD_POLL_READ);
@@ -3293,7 +3328,8 @@ DECL_HANDLER(send_socket)
         status = STATUS_PENDING;
     }
 
-    if (status == STATUS_PENDING && sock->wr_shutdown) status = STATUS_PIPE_DISCONNECTED;
+    if ((status == STATUS_PENDING || status == STATUS_DEVICE_NOT_READY) && sock->wr_shutdown)
+        status = STATUS_PIPE_DISCONNECTED;
 
     if ((async = create_request_async( fd, get_fd_comp_flags( fd ), &req->async )))
     {
