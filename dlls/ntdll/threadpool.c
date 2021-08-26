@@ -592,8 +592,10 @@ static DWORD WINAPI timer_callback_wrapper(LPVOID p)
 
 static inline ULONGLONG queue_current_time(void)
 {
-    LARGE_INTEGER now, freq;
-    NtQueryPerformanceCounter(&now, &freq);
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER now;
+    if (!freq.QuadPart) RtlQueryPerformanceFrequency(&freq);
+    RtlQueryPerformanceCounter(&now);
     return now.QuadPart * 1000 / freq.QuadPart;
 }
 
@@ -936,12 +938,13 @@ NTSTATUS WINAPI RtlCreateTimer(PHANDLE NewTimer, HANDLE TimerQueue,
     if (q->quit)
         status = STATUS_INVALID_HANDLE;
     else
+    {
+        *NewTimer = t;
         queue_add_timer(t, queue_current_time() + DueTime, TRUE);
+    }
     RtlLeaveCriticalSection(&q->cs);
 
-    if (status == STATUS_SUCCESS)
-        *NewTimer = t;
-    else
+    if (status != STATUS_SUCCESS)
         RtlFreeHeap(GetProcessHeap(), 0, t);
 
     return status;

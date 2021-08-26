@@ -1,0 +1,26 @@
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=51683
+
+diff --git a/dlls/ntdll/threadpool.c b/dlls/ntdll/threadpool.c
+index ca323919d05..20096573c2b 100644
+--- a/dlls/ntdll/threadpool.c
++++ b/dlls/ntdll/threadpool.c
+@@ -936,12 +936,13 @@ NTSTATUS WINAPI RtlCreateTimer(PHANDLE NewTimer, HANDLE TimerQueue,
+     if (q->quit)
+         status = STATUS_INVALID_HANDLE;
+     else
++    {
++        *NewTimer = t;
+         queue_add_timer(t, queue_current_time() + DueTime, TRUE);
++    }
+     RtlLeaveCriticalSection(&q->cs);
+ 
+-    if (status == STATUS_SUCCESS)
+-        *NewTimer = t;
+-    else
++    if (status != STATUS_SUCCESS)
+         RtlFreeHeap(GetProcessHeap(), 0, t);
+ 
+     return status;
+-- 
+2.33.0
+
