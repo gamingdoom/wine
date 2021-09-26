@@ -125,4 +125,7 @@ extern BOOL EMFDC_SetROP2( DC_ATTR *dc_attr, INT rop ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetStretchBltMode( DC_ATTR *dc_attr, INT mode ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetTextAlign( DC_ATTR *dc_attr, UINT align ) DECLSPEC_HIDDEN;
 
+BOOL xform_has_rotate_and_uniform_scale_and_shear( const XFORM *xform ) DECLSPEC_HIDDEN;
+BOOL xform_decompose_rotation_and_translation( XFORM *xform, XFORM *rotation_and_translation ) DECLSPEC_HIDDEN;
+
 #endif /* __WINE_GDI_PRIVATE_H */
