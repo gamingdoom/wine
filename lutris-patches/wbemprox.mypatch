@@ -1,0 +1,1506 @@
+From 1ba57ce5ad8ef38e75fa73c8ecdf9ca26774873f Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 13 Sep 2021 17:13:25 +0300
+Subject: [PATCH] wbemprox: Copy correct substring to *namespace in
+ parse_resource().
+
+Signed-off-by: Paul Gofman <pgofman@codeweavers.com>
+Signed-off-by: Hans Leidekker <hans@codeweavers.com>
+Signed-off-by: Alexandre Julliard <julliard@winehq.org>
+---
+ dlls/wbemprox/wbemlocator.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/wbemprox/wbemlocator.c b/dlls/wbemprox/wbemlocator.c
+index 5e86f2be86df..161d9845ca92 100644
+--- a/dlls/wbemprox/wbemlocator.c
++++ b/dlls/wbemprox/wbemlocator.c
+@@ -139,7 +139,7 @@ static HRESULT parse_resource( const WCHAR *resource, WCHAR **server, WCHAR **na
+     if (!(*namespace = heap_alloc( (len + 1) * sizeof(WCHAR) ))) hr = E_OUTOFMEMORY;
+     else
+     {
+-        memcpy( *namespace, p, len * sizeof(WCHAR) );
++        memcpy( *namespace, q, len * sizeof(WCHAR) );
+         (*namespace)[len] = 0;
+         hr = S_OK;
+     }
+From 3113d64f73eeeeb1b8315fd07224e25aea350bda Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 13 Sep 2021 17:13:26 +0300
+Subject: [PATCH] wbemprox: Propagate create_view() error code from parser.
+
+Signed-off-by: Paul Gofman <pgofman@codeweavers.com>
+Signed-off-by: Hans Leidekker <hans@codeweavers.com>
+Signed-off-by: Alexandre Julliard <julliard@winehq.org>
+---
+ dlls/wbemprox/wql.y | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/dlls/wbemprox/wql.y b/dlls/wbemprox/wql.y
+index 95c8d8fe817d..4d9333f9c174 100644
+--- a/dlls/wbemprox/wql.y
++++ b/dlls/wbemprox/wql.y
+@@ -291,7 +291,10 @@ associatorsof:
+ 
+             hr = create_view( VIEW_TYPE_ASSOCIATORS, $3, NULL, NULL, NULL, NULL, &view );
+             if (hr != S_OK)
++            {
++                ctx->error = hr;
+                 YYABORT;
++            }
+ 
+             PARSER_BUBBLE_UP_VIEW( parser, $$, view );
+         }
+@@ -303,7 +306,10 @@ associatorsof:
+ 
+             hr = create_view( VIEW_TYPE_ASSOCIATORS, $3, $5, NULL, NULL, NULL, &view );
+             if (hr != S_OK)
++            {
++                ctx->error = hr;
+                 YYABORT;
++            }
+ 
+             PARSER_BUBBLE_UP_VIEW( parser, $$, view );
+         }
+@@ -318,7 +324,10 @@ select:
+ 
+             hr = create_view( VIEW_TYPE_SELECT, NULL, NULL, $3, NULL, NULL, &view );
+             if (hr != S_OK)
++            {
++                ctx->error = hr;
+                 YYABORT;
++            }
+ 
+             PARSER_BUBBLE_UP_VIEW( parser, $$, view );
+         }
+@@ -330,7 +339,10 @@ select:
+ 
+             hr = create_view( VIEW_TYPE_SELECT, NULL, NULL, $4, $2, NULL, &view );
+             if (hr != S_OK)
++            {
++                ctx->error = hr;
+                 YYABORT;
++            }
+ 
+             PARSER_BUBBLE_UP_VIEW( parser, $$, view );
+         }
+@@ -342,7 +354,10 @@ select:
+ 
+             hr = create_view( VIEW_TYPE_SELECT, NULL, NULL, $4, $2, $6, &view );
+             if (hr != S_OK)
++            {
++                ctx->error = hr;
+                 YYABORT;
++            }
+ 
+             PARSER_BUBBLE_UP_VIEW( parser, $$, view );
+         }
+From 73d8cc328140e79ad4004851ee3033d93124f3de Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 13 Sep 2021 17:13:27 +0300
+Subject: [PATCH] wbemprox: Prepare for multiple namespaces.
+
+Signed-off-by: Paul Gofman <pgofman@codeweavers.com>
+Signed-off-by: Hans Leidekker <hans@codeweavers.com>
+Signed-off-by: Alexandre Julliard <julliard@winehq.org>
+---
+ dlls/wbemprox/builtin.c          | 58 +++++++++++++++++++++++++-------
+ dlls/wbemprox/class.c            | 38 +++++++++++----------
+ dlls/wbemprox/main.c             |  2 +-
+ dlls/wbemprox/process.c          |  4 +--
+ dlls/wbemprox/qualifier.c        | 22 ++++++------
+ dlls/wbemprox/query.c            | 42 ++++++++++++-----------
+ dlls/wbemprox/reg.c              | 14 ++++----
+ dlls/wbemprox/security.c         |  4 +--
+ dlls/wbemprox/service.c          |  8 ++---
+ dlls/wbemprox/services.c         | 48 ++++++++++++++++----------
+ dlls/wbemprox/sysrestore.c       |  2 +-
+ dlls/wbemprox/table.c            | 18 ++++++----
+ dlls/wbemprox/wbemlocator.c      |  4 +--
+ dlls/wbemprox/wbemprox_private.h | 35 ++++++++++++-------
+ dlls/wbemprox/wql.y              | 14 ++++----
+ 15 files changed, 190 insertions(+), 123 deletions(-)
+
+diff --git a/dlls/wbemprox/builtin.c b/dlls/wbemprox/builtin.c
+index 862c461d8b78..ad96182af6b9 100644
+--- a/dlls/wbemprox/builtin.c
++++ b/dlls/wbemprox/builtin.c
+@@ -2284,12 +2284,14 @@ static struct association *get_diskdrivetodiskpartition_pairs( UINT *count )
+     HRESULT hr;
+     UINT i;
+ 
+-    if (!(query = create_query())) return NULL;
+-    if ((hr = parse_query( L"SELECT * FROM Win32_DiskDrive", &query->view, &query->mem )) != S_OK) goto done;
++    if (!(query = create_query( WBEMPROX_NAMESPACE_CIMV2 ))) return NULL;
++    if ((hr = parse_query( WBEMPROX_NAMESPACE_CIMV2, L"SELECT * FROM Win32_DiskDrive",
++                           &query->view, &query->mem )) != S_OK) goto done;
+     if ((hr = execute_view( query->view )) != S_OK) goto done;
+ 
+-    if (!(query2 = create_query())) return FALSE;
+-    if ((hr = parse_query( L"SELECT * FROM Win32_DiskPartition", &query2->view, &query2->mem )) != S_OK) goto done;
++    if (!(query2 = create_query( WBEMPROX_NAMESPACE_CIMV2 ))) return FALSE;
++    if ((hr = parse_query( WBEMPROX_NAMESPACE_CIMV2, L"SELECT * FROM Win32_DiskPartition",
++                           &query2->view, &query2->mem )) != S_OK) goto done;
+     if ((hr = execute_view( query2->view )) != S_OK) goto done;
+ 
+     if (!(ret = heap_alloc_zero( query->view->result_count * sizeof(*ret) ))) goto done;
+@@ -2570,12 +2572,14 @@ static struct association *get_logicaldisktopartition_pairs( UINT *count )
+     HRESULT hr;
+     UINT i;
+ 
+-    if (!(query = create_query())) return NULL;
+-    if ((hr = parse_query( L"SELECT * FROM Win32_DiskPartition", &query->view, &query->mem )) != S_OK) goto done;
++    if (!(query = create_query( WBEMPROX_NAMESPACE_CIMV2 ))) return NULL;
++    if ((hr = parse_query( WBEMPROX_NAMESPACE_CIMV2, L"SELECT * FROM Win32_DiskPartition",
++                           &query->view, &query->mem )) != S_OK) goto done;
+     if ((hr = execute_view( query->view )) != S_OK) goto done;
+ 
+-    if (!(query2 = create_query())) return FALSE;
+-    if ((hr = parse_query( L"SELECT * FROM Win32_LogicalDisk WHERE DriveType=2 OR DriveType=3", &query2->view,
++    if (!(query2 = create_query( WBEMPROX_NAMESPACE_CIMV2 ))) return FALSE;
++    if ((hr = parse_query( WBEMPROX_NAMESPACE_CIMV2,
++                           L"SELECT * FROM Win32_LogicalDisk WHERE DriveType=2 OR DriveType=3", &query2->view,
+                            &query2->mem )) != S_OK) goto done;
+     if ((hr = execute_view( query2->view )) != S_OK) goto done;
+ 
+@@ -4070,7 +4074,7 @@ static enum fill_status fill_sounddevice( struct table *table, const struct expr
+ 
+ #define C(c) sizeof(c)/sizeof(c[0]), c
+ #define D(d) sizeof(d)/sizeof(d[0]), 0, (BYTE *)d
+-static struct table builtin_classes[] =
++static struct table cimv2_builtin_classes[] =
+ {
+     { L"__ASSOCIATORS", C(col_associator), D(data_associator) },
+     { L"__PARAMETERS", C(col_param), D(data_param) },
+@@ -4115,11 +4119,39 @@ static struct table builtin_classes[] =
+ #undef C
+ #undef D
+ 
++static const struct
++{
++    const WCHAR *name;
++    struct table *classes;
++    unsigned int table_count;
++}
++builtin_namespaces[WBEMPROX_NAMESPACE_LAST] =
++{
++    {L"cimv2", cimv2_builtin_classes, ARRAY_SIZE(cimv2_builtin_classes)},
++};
++
+ void init_table_list( void )
+ {
+-    static struct list tables = LIST_INIT( tables );
+-    UINT i;
++    static struct list tables[WBEMPROX_NAMESPACE_LAST];
++    UINT ns, i;
++
++    for (ns = 0; ns < ARRAY_SIZE(builtin_namespaces); ns++)
++    {
++        list_init( &tables[ns] );
++        for (i = 0; i < builtin_namespaces[ns].table_count; i++)
++            list_add_tail( &tables[ns], &builtin_namespaces[ns].classes[i].entry );
++        table_list[ns] = &tables[ns];
++    }
++}
++
++enum wbm_namespace get_namespace_from_string( const WCHAR *namespace )
++{
++    unsigned int i;
++
++    if (!wcsicmp( namespace, L"default" )) return WBEMPROX_NAMESPACE_CIMV2;
++
++    for (i = 0; i < WBEMPROX_NAMESPACE_LAST; ++i)
++        if (!wcsicmp( namespace, builtin_namespaces[i].name )) return i;
+ 
+-    for (i = 0; i < ARRAY_SIZE(builtin_classes); i++) list_add_tail( &tables, &builtin_classes[i].entry );
+-    table_list = &tables;
++    return WBEMPROX_NAMESPACE_LAST;
+ }
+diff --git a/dlls/wbemprox/class.c b/dlls/wbemprox/class.c
+index 3b7bc066aea9..cabf1c9058dd 100644
+--- a/dlls/wbemprox/class.c
++++ b/dlls/wbemprox/class.c
+@@ -36,6 +36,7 @@ struct enum_class_object
+     LONG refs;
+     struct query *query;
+     UINT index;
++    enum wbm_namespace ns;
+ };
+ 
+ static inline struct enum_class_object *impl_from_IEnumWbemClassObject(
+@@ -129,7 +130,7 @@ static HRESULT WINAPI enum_class_object_Next(
+     {
+         if (ec->index >= view->result_count) return WBEM_S_FALSE;
+         table = get_view_table( view, ec->index );
+-        hr = create_class_object( table->name, iface, ec->index, NULL, &apObjects[i] );
++        hr = create_class_object( ec->ns, table->name, iface, ec->index, NULL, &apObjects[i] );
+         if (hr != S_OK)
+         {
+             for (j = 0; j < i; j++) IWbemClassObject_Release( apObjects[j] );
+@@ -211,6 +212,7 @@ HRESULT EnumWbemClassObject_create( struct query *query, LPVOID *ppObj )
+     ec->refs  = 1;
+     ec->query = addref_query( query );
+     ec->index = 0;
++    ec->ns = query->ns;
+ 
+     *ppObj = &ec->IEnumWbemClassObject_iface;
+ 
+@@ -278,6 +280,7 @@ struct class_object
+     UINT index;
+     UINT index_method;
+     UINT index_property;
++    enum wbm_namespace ns;
+     struct record *record; /* uncommitted instance */
+ };
+ 
+@@ -346,7 +349,7 @@ static HRESULT WINAPI class_object_GetQualifierSet(
+ 
+     TRACE("%p, %p\n", iface, ppQualSet);
+ 
+-    return WbemQualifierSet_create( co->name, NULL, (void **)ppQualSet );
++    return WbemQualifierSet_create( co->ns, co->name, NULL, (void **)ppQualSet );
+ }
+ 
+ static HRESULT record_get_value( const struct record *record, UINT index, VARIANT *var, CIMTYPE *type )
+@@ -591,7 +594,7 @@ static HRESULT WINAPI class_object_GetPropertyQualifierSet(
+ 
+     TRACE("%p, %s, %p\n", iface, debugstr_w(wszProperty), ppQualSet);
+ 
+-    return WbemQualifierSet_create( co->name, wszProperty, (void **)ppQualSet );
++    return WbemQualifierSet_create( co->ns, co->name, wszProperty, (void **)ppQualSet );
+ }
+ 
+ static HRESULT WINAPI class_object_Clone(
+@@ -697,7 +700,7 @@ static HRESULT WINAPI class_object_SpawnInstance(
+         destroy_record( record );
+         return hr;
+     }
+-    hr = create_class_object( co->name, iter, 0, record, ppNewInstance );
++    hr = create_class_object( co->ns, co->name, iter, 0, record, ppNewInstance );
+     IEnumWbemClassObject_Release( iter );
+     return hr;
+ }
+@@ -808,7 +811,7 @@ static HRESULT create_signature_columns_and_data( IEnumWbemClassObject *iter, UI
+     return hr;
+ }
+ 
+-static HRESULT create_signature_table( IEnumWbemClassObject *iter, WCHAR *name )
++static HRESULT create_signature_table( IEnumWbemClassObject *iter, enum wbm_namespace ns, WCHAR *name )
+ {
+     HRESULT hr;
+     struct table *table;
+@@ -825,7 +828,7 @@ static HRESULT create_signature_table( IEnumWbemClassObject *iter, WCHAR *name )
+         heap_free( row );
+         return E_OUTOFMEMORY;
+     }
+-    if (!add_table( table )) free_table( table ); /* already exists */
++    if (!add_table( ns, table )) free_table( table ); /* already exists */
+     return S_OK;
+ }
+ 
+@@ -839,7 +842,7 @@ static WCHAR *build_signature_table_name( const WCHAR *class, const WCHAR *metho
+     return wcsupr( ret );
+ }
+ 
+-HRESULT create_signature( const WCHAR *class, const WCHAR *method, enum param_direction dir,
++HRESULT create_signature( enum wbm_namespace ns, const WCHAR *class, const WCHAR *method, enum param_direction dir,
+                           IWbemClassObject **sig )
+ {
+     static const WCHAR selectW[] = L"SELECT * FROM __PARAMETERS WHERE Class='%s' AND Method='%s' AND Direction%s";
+@@ -852,7 +855,7 @@ HRESULT create_signature( const WCHAR *class, const WCHAR *method, enum param_di
+     if (!(query = heap_alloc( len * sizeof(WCHAR) ))) return E_OUTOFMEMORY;
+     swprintf( query, len, selectW, class, method, dir >= 0 ? L">=0" : L"<=0" );
+ 
+-    hr = exec_query( query, &iter );
++    hr = exec_query( ns, query, &iter );
+     heap_free( query );
+     if (hr != S_OK) return hr;
+ 
+@@ -868,10 +871,10 @@ HRESULT create_signature( const WCHAR *class, const WCHAR *method, enum param_di
+         IEnumWbemClassObject_Release( iter );
+         return E_OUTOFMEMORY;
+     }
+-    hr = create_signature_table( iter, name );
++    hr = create_signature_table( iter, ns, name );
+     IEnumWbemClassObject_Release( iter );
+     if (hr == S_OK)
+-        hr = get_object( name, sig );
++        hr = get_object( ns, name, sig );
+ 
+     heap_free( name );
+     return hr;
+@@ -907,10 +910,10 @@ static HRESULT WINAPI class_object_GetMethod(
+         return WBEM_E_NOT_FOUND;
+     }
+ 
+-    hr = create_signature( co->name, wszName, PARAM_IN, &in );
++    hr = create_signature( co->ns, co->name, wszName, PARAM_IN, &in );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( co->name, wszName, PARAM_OUT, &out );
++    hr = create_signature( co->ns, co->name, wszName, PARAM_OUT, &out );
+     if (hr == S_OK)
+     {
+         if (ppInSignature) *ppInSignature = in;
+@@ -968,15 +971,15 @@ static HRESULT WINAPI class_object_NextMethod(
+ 
+     TRACE("%p, %08x, %p, %p, %p\n", iface, lFlags, pstrName, ppInSignature, ppOutSignature);
+ 
+-    if (!(method = get_method_name( co->name, co->index_method ))) return WBEM_S_NO_MORE_DATA;
++    if (!(method = get_method_name( co->ns, co->name, co->index_method ))) return WBEM_S_NO_MORE_DATA;
+ 
+-    hr = create_signature( co->name, method, PARAM_IN, ppInSignature );
++    hr = create_signature( co->ns, co->name, method, PARAM_IN, ppInSignature );
+     if (hr != S_OK)
+     {
+         SysFreeString( method );
+         return hr;
+     }
+-    hr = create_signature( co->name, method, PARAM_OUT, ppOutSignature );
++    hr = create_signature( co->ns, co->name, method, PARAM_OUT, ppOutSignature );
+     if (hr != S_OK)
+     {
+         SysFreeString( method );
+@@ -1011,7 +1014,7 @@ static HRESULT WINAPI class_object_GetMethodQualifierSet(
+ 
+     TRACE("%p, %s, %p\n", iface, debugstr_w(wszMethod), ppQualSet);
+ 
+-    return WbemQualifierSet_create( co->name, wszMethod, (void **)ppQualSet );
++    return WbemQualifierSet_create( co->ns, co->name, wszMethod, (void **)ppQualSet );
+ }
+ 
+ static HRESULT WINAPI class_object_GetMethodOrigin(
+@@ -1054,7 +1057,7 @@ static const IWbemClassObjectVtbl class_object_vtbl =
+     class_object_GetMethodOrigin
+ };
+ 
+-HRESULT create_class_object( const WCHAR *name, IEnumWbemClassObject *iter, UINT index,
++HRESULT create_class_object( enum wbm_namespace ns, const WCHAR *name, IEnumWbemClassObject *iter, UINT index,
+                              struct record *record, IWbemClassObject **obj )
+ {
+     struct class_object *co;
+@@ -1077,6 +1080,7 @@ HRESULT create_class_object( const WCHAR *name, IEnumWbemClassObject *iter, UINT
+     co->index_method   = 0;
+     co->index_property = 0;
+     co->record         = record;
++    co->ns             = ns;
+     if (iter) IEnumWbemClassObject_AddRef( iter );
+ 
+     *obj = &co->IWbemClassObject_iface;
+diff --git a/dlls/wbemprox/main.c b/dlls/wbemprox/main.c
+index a1c65feadb56..20ca1a085301 100644
+--- a/dlls/wbemprox/main.c
++++ b/dlls/wbemprox/main.c
+@@ -35,7 +35,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(wbemprox);
+ 
+ static HINSTANCE instance;
+ 
+-struct list *table_list;
++struct list *table_list[WBEMPROX_NAMESPACE_LAST];
+ 
+ typedef HRESULT (*fnCreateInstance)( LPVOID *ppObj );
+ 
+diff --git a/dlls/wbemprox/process.c b/dlls/wbemprox/process.c
+index 5d8af54f2174..93136e9aefc4 100644
+--- a/dlls/wbemprox/process.c
++++ b/dlls/wbemprox/process.c
+@@ -70,7 +70,7 @@ HRESULT process_get_owner( IWbemClassObject *obj, IWbemContext *context, IWbemCl
+ 
+     TRACE("%p, %p, %p, %p\n", obj, context, in, out);
+ 
+-    hr = create_signature( L"Win32_Process", L"GetOwner", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"Win32_Process", L"GetOwner", PARAM_OUT, &sig );
+     if (hr != S_OK) return hr;
+ 
+     if (out)
+@@ -127,7 +127,7 @@ HRESULT process_create( IWbemClassObject *obj, IWbemContext *context, IWbemClass
+ 
+     *out = NULL;
+ 
+-    if ((hr = create_signature( L"Win32_Process", L"Create", PARAM_OUT, &sig ))) return hr;
++    if ((hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"Win32_Process", L"Create", PARAM_OUT, &sig ))) return hr;
+ 
+     VariantInit( &command_line );
+     VariantInit( &current_directory );
+diff --git a/dlls/wbemprox/qualifier.c b/dlls/wbemprox/qualifier.c
+index 1cc4087ff354..73075b85a063 100644
+--- a/dlls/wbemprox/qualifier.c
++++ b/dlls/wbemprox/qualifier.c
+@@ -34,6 +34,7 @@ struct qualifier_set
+ {
+     IWbemQualifierSet IWbemQualifierSet_iface;
+     LONG refs;
++    enum wbm_namespace ns;
+     WCHAR *class;
+     WCHAR *member;
+ };
+@@ -89,8 +90,8 @@ static HRESULT WINAPI qualifier_set_QueryInterface(
+     return S_OK;
+ }
+ 
+-static HRESULT create_qualifier_enum( const WCHAR *class, const WCHAR *member, const WCHAR *name,
+-                                      IEnumWbemClassObject **iter )
++static HRESULT create_qualifier_enum( enum wbm_namespace ns, const WCHAR *class, const WCHAR *member,
++                                      const WCHAR *name, IEnumWbemClassObject **iter )
+ {
+     static const WCHAR fmtW[] = L"SELECT * FROM __QUALIFIERS WHERE Class='%s' AND Member='%s' AND Name='%s'";
+     static const WCHAR fmt2W[] = L"SELECT * FROM __QUALIFIERS WHERE Class='%s' AND Member='%s'";
+@@ -118,12 +119,12 @@ static HRESULT create_qualifier_enum( const WCHAR *class, const WCHAR *member, c
+         swprintf( query, len, fmt3W, class );
+     }
+ 
+-    hr = exec_query( query, iter );
++    hr = exec_query( ns, query, iter );
+     heap_free( query );
+     return hr;
+ }
+ 
+-static HRESULT get_qualifier_value( const WCHAR *class, const WCHAR *member, const WCHAR *name,
++static HRESULT get_qualifier_value( enum wbm_namespace ns, const WCHAR *class, const WCHAR *member, const WCHAR *name,
+                                     VARIANT *val, LONG *flavor )
+ {
+     IEnumWbemClassObject *iter;
+@@ -131,10 +132,10 @@ static HRESULT get_qualifier_value( const WCHAR *class, const WCHAR *member, con
+     VARIANT var;
+     HRESULT hr;
+ 
+-    hr = create_qualifier_enum( class, member, name, &iter );
++    hr = create_qualifier_enum( ns, class, member, name, &iter );
+     if (FAILED( hr )) return hr;
+ 
+-    hr = create_class_object( NULL, iter, 0, NULL, &obj );
++    hr = create_class_object( ns, NULL, iter, 0, NULL, &obj );
+     IEnumWbemClassObject_Release( iter );
+     if (FAILED( hr )) return hr;
+ 
+@@ -182,7 +183,7 @@ static HRESULT WINAPI qualifier_set_Get(
+         FIXME("flags %08x not supported\n", lFlags);
+         return E_NOTIMPL;
+     }
+-    return get_qualifier_value( set->class, set->member, wszName, pVal, plFlavor );
++    return get_qualifier_value( set->ns, set->class, set->member, wszName, pVal, plFlavor );
+ }
+ 
+ static HRESULT WINAPI qualifier_set_Put(
+@@ -220,10 +221,10 @@ static HRESULT WINAPI qualifier_set_GetNames(
+         return E_NOTIMPL;
+     }
+ 
+-    hr = create_qualifier_enum( set->class, set->member, NULL, &iter );
++    hr = create_qualifier_enum( set->ns, set->class, set->member, NULL, &iter );
+     if (FAILED( hr )) return hr;
+ 
+-    hr = create_class_object( NULL, iter, 0, NULL, &obj );
++    hr = create_class_object( set->ns, NULL, iter, 0, NULL, &obj );
+     IEnumWbemClassObject_Release( iter );
+     if (FAILED( hr )) return hr;
+ 
+@@ -272,7 +273,7 @@ static const IWbemQualifierSetVtbl qualifier_set_vtbl =
+     qualifier_set_EndEnumeration
+ };
+ 
+-HRESULT WbemQualifierSet_create( const WCHAR *class, const WCHAR *member, LPVOID *ppObj )
++HRESULT WbemQualifierSet_create( enum wbm_namespace ns, const WCHAR *class, const WCHAR *member, LPVOID *ppObj )
+ {
+     struct qualifier_set *set;
+ 
+@@ -293,6 +294,7 @@ HRESULT WbemQualifierSet_create( const WCHAR *class, const WCHAR *member, LPVOID
+         heap_free( set );
+         return E_OUTOFMEMORY;
+     }
++    set->ns = ns;
+     set->refs = 1;
+ 
+     *ppObj = &set->IWbemQualifierSet_iface;
+diff --git a/dlls/wbemprox/query.c b/dlls/wbemprox/query.c
+index ec2a43c3f5f4..108e3b4ad812 100644
+--- a/dlls/wbemprox/query.c
++++ b/dlls/wbemprox/query.c
+@@ -38,8 +38,8 @@ static HRESULT append_table( struct view *view, struct table *table )
+     return S_OK;
+ }
+ 
+-HRESULT create_view( enum view_type type, const WCHAR *path, const struct keyword *keywordlist, const WCHAR *class,
+-                     const struct property *proplist, const struct expr *cond, struct view **ret )
++HRESULT create_view( enum view_type type, enum wbm_namespace ns, const WCHAR *path, const struct keyword *keywordlist,
++                     const WCHAR *class, const struct property *proplist, const struct expr *cond, struct view **ret )
+ {
+     struct view *view = heap_alloc_zero( sizeof(*view) );
+ 
+@@ -54,7 +54,7 @@ HRESULT create_view( enum view_type type, const WCHAR *path, const struct keywor
+ 
+     case VIEW_TYPE_SELECT:
+     {
+-        struct table *table = grab_table( class );
++        struct table *table = grab_table( ns, class );
+         HRESULT hr;
+ 
+         if (table && (hr = append_table( view, table )) != S_OK)
+@@ -73,6 +73,7 @@ HRESULT create_view( enum view_type type, const WCHAR *path, const struct keywor
+     }
+ 
+     view->type = type;
++    view->ns = ns;
+     *ret = view;
+     return S_OK;
+ }
+@@ -480,13 +481,14 @@ static WCHAR *build_assoc_query( const WCHAR *class, UINT class_len )
+     return ret;
+ }
+ 
+-static HRESULT create_assoc_enum( const WCHAR *class, UINT class_len, IEnumWbemClassObject **iter )
++static HRESULT create_assoc_enum( enum wbm_namespace ns, const WCHAR *class, UINT class_len,
++                                  IEnumWbemClassObject **iter )
+ {
+     WCHAR *query;
+     HRESULT hr;
+ 
+     if (!(query = build_assoc_query( class, class_len ))) return E_OUTOFMEMORY;
+-    hr = exec_query( query, iter );
++    hr = exec_query( ns, query, iter );
+     heap_free( query );
+     return hr;
+ }
+@@ -547,7 +549,7 @@ static WCHAR *build_canonical_path( const WCHAR *relpath )
+     return ret;
+ }
+ 
+-static HRESULT get_antecedent( const WCHAR *assocclass, const WCHAR *dependent, BSTR *ret )
++static HRESULT get_antecedent( enum wbm_namespace ns, const WCHAR *assocclass, const WCHAR *dependent, BSTR *ret )
+ {
+     WCHAR *fullpath, *str;
+     IEnumWbemClassObject *iter = NULL;
+@@ -558,7 +560,7 @@ static HRESULT get_antecedent( const WCHAR *assocclass, const WCHAR *dependent,
+ 
+     if (!(fullpath = build_canonical_path( dependent ))) return E_OUTOFMEMORY;
+     if (!(str = build_antecedent_query( assocclass, fullpath ))) goto done;
+-    if ((hr = exec_query( str, &iter )) != S_OK) goto done;
++    if ((hr = exec_query( ns, str, &iter )) != S_OK) goto done;
+ 
+     IEnumWbemClassObject_Next( iter, WBEM_INFINITE, 1, &obj, &count );
+     if (!count)
+@@ -579,13 +581,13 @@ static HRESULT get_antecedent( const WCHAR *assocclass, const WCHAR *dependent,
+     return hr;
+ }
+ 
+-static HRESULT do_query( const WCHAR *str, struct query **ret_query )
++static HRESULT do_query( enum wbm_namespace ns, const WCHAR *str, struct query **ret_query )
+ {
+     struct query *query;
+     HRESULT hr;
+ 
+-    if (!(query = create_query())) return E_OUTOFMEMORY;
+-    if ((hr = parse_query( str, &query->view, &query->mem )) != S_OK || (hr = execute_view( query->view )) != S_OK)
++    if (!(query = create_query( ns ))) return E_OUTOFMEMORY;
++    if ((hr = parse_query( ns, str, &query->view, &query->mem )) != S_OK || (hr = execute_view( query->view )) != S_OK)
+     {
+         release_query( query );
+         return hr;
+@@ -594,7 +596,8 @@ static HRESULT do_query( const WCHAR *str, struct query **ret_query )
+     return S_OK;
+ }
+ 
+-static HRESULT get_antecedent_table( const WCHAR *assocclass, const WCHAR *dependent, struct table **table )
++static HRESULT get_antecedent_table( enum wbm_namespace ns, const WCHAR *assocclass, const WCHAR *dependent,
++                                     struct table **table )
+ {
+     BSTR antecedent = NULL;
+     struct path *path = NULL;
+@@ -602,7 +605,7 @@ static HRESULT get_antecedent_table( const WCHAR *assocclass, const WCHAR *depen
+     struct query *query = NULL;
+     HRESULT hr;
+ 
+-    if ((hr = get_antecedent( assocclass, dependent, &antecedent )) != S_OK) return hr;
++    if ((hr = get_antecedent( ns, assocclass, dependent, &antecedent )) != S_OK) return hr;
+     if (!antecedent)
+     {
+         *table = NULL;
+@@ -615,7 +618,7 @@ static HRESULT get_antecedent_table( const WCHAR *assocclass, const WCHAR *depen
+         goto done;
+     }
+ 
+-    if ((hr = do_query( str, &query )) != S_OK) goto done;
++    if ((hr = do_query( ns, str, &query )) != S_OK) goto done;
+     if (query->view->table_count) *table = addref_table( query->view->table[0] );
+     else *table = NULL;
+ 
+@@ -636,7 +639,7 @@ static HRESULT exec_assoc_view( struct view *view )
+     if (view->keywordlist) FIXME( "ignoring keywords\n" );
+     if ((hr = parse_path( view->path, &path )) != S_OK) return hr;
+ 
+-    if ((hr = create_assoc_enum( path->class, path->class_len, &iter )) != S_OK) goto done;
++    if ((hr = create_assoc_enum( view->ns, path->class, path->class_len, &iter )) != S_OK) goto done;
+     for (;;)
+     {
+         ULONG count;
+@@ -654,7 +657,7 @@ static HRESULT exec_assoc_view( struct view *view )
+         }
+         IWbemClassObject_Release( obj );
+ 
+-        hr = get_antecedent_table( V_BSTR(&var), view->path, &table );
++        hr = get_antecedent_table( view->ns, V_BSTR(&var), view->path, &table );
+         VariantClear( &var );
+         if (hr != S_OK) goto done;
+ 
+@@ -735,12 +738,13 @@ HRESULT execute_view( struct view *view )
+     }
+ }
+ 
+-struct query *create_query(void)
++struct query *create_query( enum wbm_namespace ns )
+ {
+     struct query *query;
+ 
+     if (!(query = heap_alloc( sizeof(*query) ))) return NULL;
+     list_init( &query->mem );
++    query->ns = ns;
+     query->refs = 1;
+     return query;
+ }
+@@ -766,14 +770,14 @@ void release_query( struct query *query )
+     if (!InterlockedDecrement( &query->refs )) free_query( query );
+ }
+ 
+-HRESULT exec_query( const WCHAR *str, IEnumWbemClassObject **result )
++HRESULT exec_query( enum wbm_namespace ns, const WCHAR *str, IEnumWbemClassObject **result )
+ {
+     HRESULT hr;
+     struct query *query;
+ 
+     *result = NULL;
+-    if (!(query = create_query())) return E_OUTOFMEMORY;
+-    hr = parse_query( str, &query->view, &query->mem );
++    if (!(query = create_query( ns ))) return E_OUTOFMEMORY;
++    hr = parse_query( ns, str, &query->view, &query->mem );
+     if (hr != S_OK) goto done;
+     hr = execute_view( query->view );
+     if (hr != S_OK) goto done;
+diff --git a/dlls/wbemprox/reg.c b/dlls/wbemprox/reg.c
+index 5cdd857a48f2..361f0ec4b4af 100644
+--- a/dlls/wbemprox/reg.c
++++ b/dlls/wbemprox/reg.c
+@@ -129,7 +129,7 @@ HRESULT reg_create_key( IWbemClassObject *obj, IWbemContext *context, IWbemClass
+     hr = IWbemClassObject_Get( in, L"sSubKeyName", 0, &subkey, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"StdRegProv", L"CreateKey", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"CreateKey", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &subkey );
+@@ -228,7 +228,7 @@ HRESULT reg_enum_key( IWbemClassObject *obj, IWbemContext *context, IWbemClassOb
+     hr = IWbemClassObject_Get( in, L"sSubKeyName", 0, &subkey, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"StdRegProv", L"EnumKey", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"EnumKey", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &subkey );
+@@ -339,7 +339,7 @@ HRESULT reg_enum_values( IWbemClassObject *obj, IWbemContext *context, IWbemClas
+     hr = IWbemClassObject_Get( in, L"sSubKeyName", 0, &subkey, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"StdRegProv", L"EnumValues", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"EnumValues", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &subkey );
+@@ -436,7 +436,7 @@ HRESULT reg_get_stringvalue( IWbemClassObject *obj, IWbemContext *context, IWbem
+         return hr;
+     }
+ 
+-    hr = create_signature( L"StdRegProv", L"GetStringValue", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"GetStringValue", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+@@ -525,7 +525,7 @@ HRESULT reg_set_stringvalue( IWbemClassObject *obj, IWbemContext *context, IWbem
+         return hr;
+     }
+ 
+-    hr = create_signature( L"StdRegProv", L"SetStringValue", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"SetStringValue", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+@@ -608,7 +608,7 @@ HRESULT reg_set_dwordvalue( IWbemClassObject *obj, IWbemContext *context, IWbemC
+         return hr;
+     }
+ 
+-    hr = create_signature( L"StdRegProv", L"SetDWORDValue", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"SetDWORDValue", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+@@ -665,7 +665,7 @@ HRESULT reg_delete_key( IWbemClassObject *obj, IWbemContext *context, IWbemClass
+     hr = IWbemClassObject_Get( in, L"sSubKeyName", 0, &subkey, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"StdRegProv", L"DeleteKey", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"StdRegProv", L"DeleteKey", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &subkey );
+diff --git a/dlls/wbemprox/security.c b/dlls/wbemprox/security.c
+index eee8b09369ef..a27cca798f32 100644
+--- a/dlls/wbemprox/security.c
++++ b/dlls/wbemprox/security.c
+@@ -140,7 +140,7 @@ HRESULT security_get_sd( IWbemClassObject *obj, IWbemContext *context, IWbemClas
+ 
+     TRACE("%p, %p, %p, %p\n", obj, context, in, out);
+ 
+-    hr = create_signature( L"__SystemSecurity", L"GetSD", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"__SystemSecurity", L"GetSD", PARAM_OUT, &sig );
+ 
+     if (SUCCEEDED(hr))
+     {
+@@ -193,7 +193,7 @@ HRESULT security_set_sd( IWbemClassObject *obj, IWbemContext *context, IWbemClas
+ 
+     FIXME("stub\n");
+ 
+-    hr = create_signature( L"__SystemSecurity", L"SetSD", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"__SystemSecurity", L"SetSD", PARAM_OUT, &sig );
+ 
+     if (SUCCEEDED(hr))
+     {
+diff --git a/dlls/wbemprox/service.c b/dlls/wbemprox/service.c
+index 1ee0c9903ec4..b0b7bce08723 100644
+--- a/dlls/wbemprox/service.c
++++ b/dlls/wbemprox/service.c
+@@ -87,7 +87,7 @@ HRESULT service_pause_service( IWbemClassObject *obj, IWbemContext *context, IWb
+     hr = IWbemClassObject_Get( obj, L"Name", 0, &name, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"Win32_Service", L"PauseService", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"Win32_Service", L"PauseService", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+@@ -132,7 +132,7 @@ HRESULT service_resume_service( IWbemClassObject *obj, IWbemContext *context, IW
+     hr = IWbemClassObject_Get( obj, L"Name", 0, &name, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"Win32_Service", L"ResumeService", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"Win32_Service", L"ResumeService", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+@@ -201,7 +201,7 @@ HRESULT service_start_service( IWbemClassObject *obj, IWbemContext *context, IWb
+     hr = IWbemClassObject_Get( obj, L"Name", 0, &name, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"Win32_Service", L"StartService", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"Win32_Service", L"StartService", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+@@ -246,7 +246,7 @@ HRESULT service_stop_service( IWbemClassObject *obj, IWbemContext *context, IWbe
+     hr = IWbemClassObject_Get( obj, L"Name", 0, &name, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"Win32_Service", L"StopService", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"Win32_Service", L"StopService", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &name );
+diff --git a/dlls/wbemprox/services.c b/dlls/wbemprox/services.c
+index faed31b79afa..1c54cf3123ea 100644
+--- a/dlls/wbemprox/services.c
++++ b/dlls/wbemprox/services.c
+@@ -159,6 +159,7 @@ struct async_header
+ struct async_query
+ {
+     struct async_header hdr;
++    enum wbm_namespace ns;
+     WCHAR *str;
+ };
+ 
+@@ -208,7 +209,7 @@ struct wbem_services
+     IWbemServices IWbemServices_iface;
+     LONG refs;
+     CRITICAL_SECTION cs;
+-    WCHAR *namespace;
++    enum wbm_namespace ns;
+     struct async_header *async;
+     IWbemContext *context;
+ };
+@@ -246,7 +247,6 @@ static ULONG WINAPI wbem_services_Release(
+         DeleteCriticalSection( &ws->cs );
+         if (ws->context)
+             IWbemContext_Release( ws->context );
+-        heap_free( ws->namespace );
+         heap_free( ws );
+     }
+     return refs;
+@@ -293,10 +293,10 @@ static HRESULT WINAPI wbem_services_OpenNamespace(
+     TRACE("%p, %s, 0x%08x, %p, %p, %p\n", iface, debugstr_w(strNamespace), lFlags,
+           pCtx, ppWorkingNamespace, ppResult);
+ 
+-    if ((wcsicmp( strNamespace, L"cimv2" ) && wcsicmp( strNamespace, L"default" )) || ws->namespace)
++    if (ws->ns != WBEMPROX_NAMESPACE_LAST || !strNamespace)
+         return WBEM_E_INVALID_NAMESPACE;
+ 
+-    return WbemServices_create( L"cimv2", NULL, (void **)ppWorkingNamespace );
++    return WbemServices_create( strNamespace, NULL, (void **)ppWorkingNamespace );
+ }
+ 
+ static HRESULT WINAPI wbem_services_CancelAsyncCall(
+@@ -454,18 +454,18 @@ WCHAR *query_from_path( const struct path *path )
+     return query;
+ }
+ 
+-static HRESULT create_instance_enum( const struct path *path, IEnumWbemClassObject **iter )
++static HRESULT create_instance_enum( enum wbm_namespace ns, const struct path *path, IEnumWbemClassObject **iter )
+ {
+     WCHAR *query;
+     HRESULT hr;
+ 
+     if (!(query = query_from_path( path ))) return E_OUTOFMEMORY;
+-    hr = exec_query( query, iter );
++    hr = exec_query( ns, query, iter );
+     heap_free( query );
+     return hr;
+ }
+ 
+-HRESULT get_object( const WCHAR *object_path, IWbemClassObject **obj )
++HRESULT get_object( enum wbm_namespace ns, const WCHAR *object_path, IWbemClassObject **obj )
+ {
+     IEnumWbemClassObject *iter;
+     struct path *path;
+@@ -475,7 +475,7 @@ HRESULT get_object( const WCHAR *object_path, IWbemClassObject **obj )
+     hr = parse_path( object_path, &path );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_instance_enum( path, &iter );
++    hr = create_instance_enum( ns, path, &iter );
+     if (hr != S_OK)
+     {
+         free_path( path );
+@@ -500,15 +500,17 @@ static HRESULT WINAPI wbem_services_GetObject(
+     IWbemClassObject **ppObject,
+     IWbemCallResult **ppCallResult )
+ {
++    struct wbem_services *services = impl_from_IWbemServices( iface );
++
+     TRACE("%p, %s, 0x%08x, %p, %p, %p\n", iface, debugstr_w(strObjectPath), lFlags,
+           pCtx, ppObject, ppCallResult);
+ 
+     if (lFlags) FIXME("unsupported flags 0x%08x\n", lFlags);
+ 
+     if (!strObjectPath || !strObjectPath[0])
+-        return create_class_object( NULL, NULL, 0, NULL, ppObject );
++        return create_class_object( services->ns, NULL, NULL, 0, NULL, ppObject );
+ 
+-    return get_object( strObjectPath, ppObject );
++    return get_object( services->ns, strObjectPath, ppObject );
+ }
+ 
+ static HRESULT WINAPI wbem_services_GetObjectAsync(
+@@ -639,6 +641,7 @@ static HRESULT WINAPI wbem_services_CreateInstanceEnum(
+     IWbemContext *pCtx,
+     IEnumWbemClassObject **ppEnum )
+ {
++    struct wbem_services *services = impl_from_IWbemServices( iface );
+     struct path *path;
+     HRESULT hr;
+ 
+@@ -649,7 +652,7 @@ static HRESULT WINAPI wbem_services_CreateInstanceEnum(
+     hr = parse_path( strClass, &path );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_instance_enum( path, ppEnum );
++    hr = create_instance_enum( services->ns, path, ppEnum );
+     free_path( path );
+     return hr;
+ }
+@@ -673,12 +676,14 @@ static HRESULT WINAPI wbem_services_ExecQuery(
+     IWbemContext *pCtx,
+     IEnumWbemClassObject **ppEnum )
+ {
++    struct wbem_services *services = impl_from_IWbemServices( iface );
++
+     TRACE("%p, %s, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strQueryLanguage),
+           debugstr_w(strQuery), lFlags, pCtx, ppEnum);
+ 
+     if (!strQueryLanguage || !strQuery || !strQuery[0]) return WBEM_E_INVALID_PARAMETER;
+     if (wcsicmp( strQueryLanguage, L"WQL" )) return WBEM_E_INVALID_QUERY_TYPE;
+-    return exec_query( strQuery, ppEnum );
++    return exec_query( services->ns, strQuery, ppEnum );
+ }
+ 
+ static void async_exec_query( struct async_header *hdr )
+@@ -689,7 +694,7 @@ static void async_exec_query( struct async_header *hdr )
+     ULONG count;
+     HRESULT hr;
+ 
+-    hr = exec_query( query->str, &result );
++    hr = exec_query( query->ns, query->str, &result );
+     if (hr == S_OK)
+     {
+         for (;;)
+@@ -736,6 +741,7 @@ static HRESULT WINAPI wbem_services_ExecQueryAsync(
+         goto done;
+     }
+     if (!(query = heap_alloc_zero( sizeof(*query) ))) goto done;
++    query->ns = services->ns;
+     async = (struct async_header *)query;
+ 
+     if (!(init_async( async, sink, async_exec_query )))
+@@ -862,12 +868,12 @@ static HRESULT WINAPI wbem_services_ExecMethod(
+         hr = E_OUTOFMEMORY;
+         goto done;
+     }
+-    if (!(query = create_query()))
++    if (!(query = create_query( services->ns )))
+     {
+         hr = E_OUTOFMEMORY;
+         goto done;
+     }
+-    hr = parse_query( str, &query->view, &query->mem );
++    hr = parse_query( services->ns, str, &query->view, &query->mem );
+     if (hr != S_OK) goto done;
+ 
+     hr = execute_view( query->view );
+@@ -877,7 +883,7 @@ static HRESULT WINAPI wbem_services_ExecMethod(
+     if (hr != S_OK) goto done;
+ 
+     table = get_view_table( query->view, 0 );
+-    hr = create_class_object( table->name, result, 0, NULL, &obj );
++    hr = create_class_object( services->ns, table->name, result, 0, NULL, &obj );
+     if (hr != S_OK) goto done;
+ 
+     hr = get_method( table, strMethodName, &func );
+@@ -940,15 +946,21 @@ static const IWbemServicesVtbl wbem_services_vtbl =
+ HRESULT WbemServices_create( const WCHAR *namespace, IWbemContext *context, LPVOID *ppObj )
+ {
+     struct wbem_services *ws;
++    enum wbm_namespace ns;
++
++    TRACE("namespace %s, context %p, ppObj %p.\n", debugstr_w(namespace), context, ppObj);
+ 
+-    TRACE("(%p)\n", ppObj);
++    if (!namespace)
++        ns = WBEMPROX_NAMESPACE_LAST;
++    else if ((ns = get_namespace_from_string( namespace )) == WBEMPROX_NAMESPACE_LAST)
++        return WBEM_E_INVALID_NAMESPACE;
+ 
+     ws = heap_alloc_zero( sizeof(*ws) );
+     if (!ws) return E_OUTOFMEMORY;
+ 
+     ws->IWbemServices_iface.lpVtbl = &wbem_services_vtbl;
+     ws->refs      = 1;
+-    ws->namespace = heap_strdupW( namespace );
++    ws->ns        = ns;
+     InitializeCriticalSection( &ws->cs );
+     ws->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": wbemprox_services.cs");
+     if (context)
+diff --git a/dlls/wbemprox/sysrestore.c b/dlls/wbemprox/sysrestore.c
+index f84d9625ae49..44c7c4a98a34 100644
+--- a/dlls/wbemprox/sysrestore.c
++++ b/dlls/wbemprox/sysrestore.c
+@@ -54,7 +54,7 @@ HRESULT sysrestore_enable( IWbemClassObject *obj, IWbemContext *context, IWbemCl
+     hr = IWbemClassObject_Get( in, L"Drive", 0, &drive, NULL, NULL );
+     if (hr != S_OK) return hr;
+ 
+-    hr = create_signature( L"SystemRestore", L"Enable", PARAM_OUT, &sig );
++    hr = create_signature( WBEMPROX_NAMESPACE_CIMV2, L"SystemRestore", L"Enable", PARAM_OUT, &sig );
+     if (hr != S_OK)
+     {
+         VariantClear( &drive );
+diff --git a/dlls/wbemprox/table.c b/dlls/wbemprox/table.c
+index 42971a420ea5..02551af6eedc 100644
+--- a/dlls/wbemprox/table.c
++++ b/dlls/wbemprox/table.c
+@@ -352,11 +352,13 @@ struct table *addref_table( struct table *table )
+     return table;
+ }
+ 
+-struct table *grab_table( const WCHAR *name )
++struct table *grab_table( enum wbm_namespace ns, const WCHAR *name )
+ {
+     struct table *table;
+ 
+-    LIST_FOR_EACH_ENTRY( table, table_list, struct table, entry )
++    if (ns == WBEMPROX_NAMESPACE_LAST) return NULL;
++
++    LIST_FOR_EACH_ENTRY( table, table_list[ns], struct table, entry )
+     {
+         if (name && !wcsicmp( table->name, name ))
+         {
+@@ -387,11 +389,13 @@ struct table *create_table( const WCHAR *name, UINT num_cols, const struct colum
+     return table;
+ }
+ 
+-BOOL add_table( struct table *table )
++BOOL add_table( enum wbm_namespace ns, struct table *table )
+ {
+     struct table *iter;
+ 
+-    LIST_FOR_EACH_ENTRY( iter, table_list, struct table, entry )
++    if (ns == WBEMPROX_NAMESPACE_LAST) return FALSE;
++
++    LIST_FOR_EACH_ENTRY( iter, table_list[ns], struct table, entry )
+     {
+         if (!wcsicmp( iter->name, table->name ))
+         {
+@@ -399,18 +403,18 @@ BOOL add_table( struct table *table )
+             return FALSE;
+         }
+     }
+-    list_add_tail( table_list, &table->entry );
++    list_add_tail( table_list[ns], &table->entry );
+     TRACE("added %p\n", table);
+     return TRUE;
+ }
+ 
+-BSTR get_method_name( const WCHAR *class, UINT index )
++BSTR get_method_name( enum wbm_namespace ns, const WCHAR *class, UINT index )
+ {
+     struct table *table;
+     UINT i, count = 0;
+     BSTR ret;
+ 
+-    if (!(table = grab_table( class ))) return NULL;
++    if (!(table = grab_table( ns, class ))) return NULL;
+ 
+     for (i = 0; i < table->num_cols; i++)
+     {
+diff --git a/dlls/wbemprox/wbemlocator.c b/dlls/wbemprox/wbemlocator.c
+index 161d9845ca92..dc2a13deda3c 100644
+--- a/dlls/wbemprox/wbemlocator.c
++++ b/dlls/wbemprox/wbemlocator.c
+@@ -134,8 +134,6 @@ static HRESULT parse_resource( const WCHAR *resource, WCHAR **server, WCHAR **na
+     }
+     q++;
+     len = lstrlenW( q );
+-    if (wcsicmp( q, L"cimv2" ) && wcsicmp( q, L"default" ))
+-        goto done;
+     if (!(*namespace = heap_alloc( (len + 1) * sizeof(WCHAR) ))) hr = E_OUTOFMEMORY;
+     else
+     {
+@@ -193,7 +191,7 @@ static HRESULT WINAPI wbem_locator_ConnectServer(
+     if (SUCCEEDED( hr ))
+         return WBEM_NO_ERROR;
+ 
+-    return WBEM_E_FAILED;
++    return hr;
+ }
+ 
+ static const IWbemLocatorVtbl wbem_locator_vtbl =
+diff --git a/dlls/wbemprox/wbemprox_private.h b/dlls/wbemprox/wbemprox_private.h
+index ded413c99a7e..cd655e542438 100644
+--- a/dlls/wbemprox/wbemprox_private.h
++++ b/dlls/wbemprox/wbemprox_private.h
+@@ -20,8 +20,14 @@
+ #include "wine/heap.h"
+ #include "wine/list.h"
+ 
++enum wbm_namespace
++{
++    WBEMPROX_NAMESPACE_CIMV2,
++    WBEMPROX_NAMESPACE_LAST,
++};
++
+ extern IClientSecurity client_security DECLSPEC_HIDDEN;
+-extern struct list *table_list DECLSPEC_HIDDEN;
++extern struct list *table_list[WBEMPROX_NAMESPACE_LAST] DECLSPEC_HIDDEN;
+ 
+ enum param_direction
+ {
+@@ -162,6 +168,7 @@ enum view_type
+ 
+ struct view
+ {
++    enum wbm_namespace ns;
+     enum view_type type;
+     const WCHAR *path;                      /* ASSOCIATORS OF query */
+     const struct keyword *keywordlist;
+@@ -176,6 +183,7 @@ struct view
+ struct query
+ {
+     LONG refs;
++    enum wbm_namespace ns;
+     struct view *view;
+     struct list mem;
+ };
+@@ -192,24 +200,25 @@ HRESULT parse_path( const WCHAR *, struct path ** ) DECLSPEC_HIDDEN;
+ void free_path( struct path * ) DECLSPEC_HIDDEN;
+ WCHAR *query_from_path( const struct path * ) DECLSPEC_HIDDEN;
+ 
+-struct query *create_query(void) DECLSPEC_HIDDEN;
++struct query *create_query( enum wbm_namespace ) DECLSPEC_HIDDEN;
+ void free_query( struct query * ) DECLSPEC_HIDDEN;
+ struct query *addref_query( struct query * ) DECLSPEC_HIDDEN;
+ void release_query( struct query *query ) DECLSPEC_HIDDEN;
+-HRESULT exec_query( const WCHAR *, IEnumWbemClassObject ** ) DECLSPEC_HIDDEN;
+-HRESULT parse_query( const WCHAR *, struct view **, struct list * ) DECLSPEC_HIDDEN;
+-HRESULT create_view( enum view_type, const WCHAR *, const struct keyword *, const WCHAR *, const struct property *,
+-                     const struct expr *, struct view ** ) DECLSPEC_HIDDEN;
++HRESULT exec_query( enum wbm_namespace, const WCHAR *, IEnumWbemClassObject ** ) DECLSPEC_HIDDEN;
++HRESULT parse_query( enum wbm_namespace, const WCHAR *, struct view **, struct list * ) DECLSPEC_HIDDEN;
++HRESULT create_view( enum view_type, enum wbm_namespace, const WCHAR *, const struct keyword *, const WCHAR *,
++                     const struct property *, const struct expr *, struct view ** ) DECLSPEC_HIDDEN;
+ void destroy_view( struct view * ) DECLSPEC_HIDDEN;
+ HRESULT execute_view( struct view * ) DECLSPEC_HIDDEN;
+ struct table *get_view_table( const struct view *, UINT ) DECLSPEC_HIDDEN;
+ void init_table_list( void ) DECLSPEC_HIDDEN;
+-struct table *grab_table( const WCHAR * ) DECLSPEC_HIDDEN;
++enum wbm_namespace get_namespace_from_string( const WCHAR *namespace ) DECLSPEC_HIDDEN;
++struct table *grab_table( enum wbm_namespace, const WCHAR * ) DECLSPEC_HIDDEN;
+ struct table *addref_table( struct table * ) DECLSPEC_HIDDEN;
+ void release_table( struct table * ) DECLSPEC_HIDDEN;
+ struct table *create_table( const WCHAR *, UINT, const struct column *, UINT, UINT, BYTE *,
+                             enum fill_status (*)(struct table *, const struct expr *) ) DECLSPEC_HIDDEN;
+-BOOL add_table( struct table * ) DECLSPEC_HIDDEN;
++BOOL add_table( enum wbm_namespace, struct table * ) DECLSPEC_HIDDEN;
+ void free_columns( struct column *, UINT ) DECLSPEC_HIDDEN;
+ void free_row_values( const struct table *, UINT ) DECLSPEC_HIDDEN;
+ void clear_table( struct table * ) DECLSPEC_HIDDEN;
+@@ -230,19 +239,19 @@ VARTYPE to_vartype( CIMTYPE ) DECLSPEC_HIDDEN;
+ void destroy_array( struct array *, CIMTYPE ) DECLSPEC_HIDDEN;
+ BOOL is_result_prop( const struct view *, const WCHAR * ) DECLSPEC_HIDDEN;
+ HRESULT get_properties( const struct view *, UINT, LONG, SAFEARRAY ** ) DECLSPEC_HIDDEN;
+-HRESULT get_object( const WCHAR *, IWbemClassObject ** ) DECLSPEC_HIDDEN;
+-BSTR get_method_name( const WCHAR *, UINT ) DECLSPEC_HIDDEN;
++HRESULT get_object( enum wbm_namespace ns, const WCHAR *, IWbemClassObject ** ) DECLSPEC_HIDDEN;
++BSTR get_method_name( enum wbm_namespace ns, const WCHAR *, UINT ) DECLSPEC_HIDDEN;
+ void set_variant( VARTYPE, LONGLONG, void *, VARIANT * ) DECLSPEC_HIDDEN;
+-HRESULT create_signature( const WCHAR *, const WCHAR *, enum param_direction,
++HRESULT create_signature( enum wbm_namespace ns, const WCHAR *, const WCHAR *, enum param_direction,
+                           IWbemClassObject ** ) DECLSPEC_HIDDEN;
+ 
+ HRESULT WbemLocator_create(LPVOID *) DECLSPEC_HIDDEN;
+ HRESULT WbemServices_create(const WCHAR *, IWbemContext *, LPVOID *) DECLSPEC_HIDDEN;
+ HRESULT WbemContext_create(void **) DECLSPEC_HIDDEN;
+-HRESULT create_class_object(const WCHAR *, IEnumWbemClassObject *, UINT,
++HRESULT create_class_object(enum wbm_namespace ns, const WCHAR *, IEnumWbemClassObject *, UINT,
+                             struct record *, IWbemClassObject **) DECLSPEC_HIDDEN;
+ HRESULT EnumWbemClassObject_create(struct query *, LPVOID *) DECLSPEC_HIDDEN;
+-HRESULT WbemQualifierSet_create(const WCHAR *, const WCHAR *, LPVOID *) DECLSPEC_HIDDEN;
++HRESULT WbemQualifierSet_create(enum wbm_namespace, const WCHAR *, const WCHAR *, LPVOID *) DECLSPEC_HIDDEN;
+ 
+ HRESULT process_get_owner(IWbemClassObject *obj, IWbemContext *context, IWbemClassObject *in, IWbemClassObject **out) DECLSPEC_HIDDEN;
+ HRESULT process_create(IWbemClassObject *obj, IWbemContext *context, IWbemClassObject *in, IWbemClassObject **out) DECLSPEC_HIDDEN;
+diff --git a/dlls/wbemprox/wql.y b/dlls/wbemprox/wql.y
+index 4d9333f9c174..7a6d7cf505ca 100644
+--- a/dlls/wbemprox/wql.y
++++ b/dlls/wbemprox/wql.y
+@@ -38,6 +38,7 @@ struct parser
+     HRESULT error;
+     struct view **view;
+     struct list *mem;
++    enum wbm_namespace ns;
+ };
+ 
+ struct string
+@@ -289,7 +290,7 @@ associatorsof:
+             struct parser *parser = ctx;
+             struct view *view;
+ 
+-            hr = create_view( VIEW_TYPE_ASSOCIATORS, $3, NULL, NULL, NULL, NULL, &view );
++            hr = create_view( VIEW_TYPE_ASSOCIATORS, ctx->ns, $3, NULL, NULL, NULL, NULL, &view );
+             if (hr != S_OK)
+             {
+                 ctx->error = hr;
+@@ -304,7 +305,7 @@ associatorsof:
+             struct parser *parser = ctx;
+             struct view *view;
+ 
+-            hr = create_view( VIEW_TYPE_ASSOCIATORS, $3, $5, NULL, NULL, NULL, &view );
++            hr = create_view( VIEW_TYPE_ASSOCIATORS, ctx->ns, $3, $5, NULL, NULL, NULL, &view );
+             if (hr != S_OK)
+             {
+                 ctx->error = hr;
+@@ -322,7 +323,7 @@ select:
+             struct parser *parser = ctx;
+             struct view *view;
+ 
+-            hr = create_view( VIEW_TYPE_SELECT, NULL, NULL, $3, NULL, NULL, &view );
++            hr = create_view( VIEW_TYPE_SELECT, ctx->ns, NULL, NULL, $3, NULL, NULL, &view );
+             if (hr != S_OK)
+             {
+                 ctx->error = hr;
+@@ -337,7 +338,7 @@ select:
+             struct parser *parser = ctx;
+             struct view *view;
+ 
+-            hr = create_view( VIEW_TYPE_SELECT, NULL, NULL, $4, $2, NULL, &view );
++            hr = create_view( VIEW_TYPE_SELECT, ctx->ns, NULL, NULL, $4, $2, NULL, &view );
+             if (hr != S_OK)
+             {
+                 ctx->error = hr;
+@@ -352,7 +353,7 @@ select:
+             struct parser *parser = ctx;
+             struct view *view;
+ 
+-            hr = create_view( VIEW_TYPE_SELECT, NULL, NULL, $4, $2, $6, &view );
++            hr = create_view( VIEW_TYPE_SELECT, ctx->ns, NULL, NULL, $4, $2, $6, &view );
+             if (hr != S_OK)
+             {
+                 ctx->error = hr;
+@@ -594,7 +595,7 @@ const_val:
+ 
+ %%
+ 
+-HRESULT parse_query( const WCHAR *str, struct view **view, struct list *mem )
++HRESULT parse_query( enum wbm_namespace ns, const WCHAR *str, struct view **view, struct list *mem )
+ {
+     struct parser parser;
+     int ret;
+@@ -607,6 +608,7 @@ HRESULT parse_query( const WCHAR *str, struct view **view, struct list *mem )
+     parser.error = WBEM_E_INVALID_QUERY;
+     parser.view  = view;
+     parser.mem   = mem;
++    parser.ns    = ns;
+ 
+     ret = wql_parse( &parser );
+     TRACE("wql_parse returned %d\n", ret);
+From 73aab21de686e8a6bf663fc05563a745574b1a85 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 13 Sep 2021 17:13:28 +0300
+Subject: [PATCH] wbemprox: Return WBEM_E_INVALID_CLASS from create_view() if
+ namespace is empty.
+
+Signed-off-by: Paul Gofman <pgofman@codeweavers.com>
+Signed-off-by: Hans Leidekker <hans@codeweavers.com>
+Signed-off-by: Alexandre Julliard <julliard@winehq.org>
+---
+ dlls/wbemprox/query.c       |  1 +
+ dlls/wbemprox/tests/query.c | 28 ++++++++++++++++++++++++++++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/dlls/wbemprox/query.c b/dlls/wbemprox/query.c
+index 108e3b4ad812..77ed27e105d5 100644
+--- a/dlls/wbemprox/query.c
++++ b/dlls/wbemprox/query.c
+@@ -62,6 +62,7 @@ HRESULT create_view( enum view_type type, enum wbm_namespace ns, const WCHAR *pa
+             heap_free( view );
+             return hr;
+         }
++        else if (!table && ns == WBEMPROX_NAMESPACE_LAST) return WBEM_E_INVALID_CLASS;
+         view->proplist = proplist;
+         view->cond     = cond;
+         break;
+diff --git a/dlls/wbemprox/tests/query.c b/dlls/wbemprox/tests/query.c
+index 784ebd3503d5..69bb8e7977ed 100644
+--- a/dlls/wbemprox/tests/query.c
++++ b/dlls/wbemprox/tests/query.c
+@@ -2061,6 +2061,33 @@ static void test_Win32_LogicalDisk( IWbemServices *services )
+     SysFreeString( wql );
+ }
+ 
++static void test_empty_namespace( IWbemLocator *locator )
++{
++    BSTR path = SysAllocString( L"ROOT" );
++    BSTR wql = SysAllocString( L"wql" );
++    IEnumWbemClassObject *result;
++    IWbemServices *services;
++    BSTR query;
++    HRESULT hr;
++
++    hr = IWbemLocator_ConnectServer( locator, path, NULL, NULL, NULL, 0, NULL, NULL, &services );
++    ok( hr == S_OK, "failed to get IWbemServices interface %08x\n", hr );
++
++    query = SysAllocString( L"SELECT * FROM __ASSOCIATORS" );
++    hr = IWbemServices_ExecQuery( services, wql, query, 0, NULL, &result );
++    ok( hr == WBEM_E_INVALID_CLASS, "Query failed: %08x\n", hr );
++    SysFreeString( query );
++
++    query = SysAllocString( L"SELECT * FROM Win32_OperatingSystem" );
++    hr = IWbemServices_ExecQuery( services, wql, query, 0, NULL, &result );
++    ok( hr == WBEM_E_INVALID_CLASS, "got %08x\n", hr );
++    SysFreeString( query );
++
++    SysFreeString( wql );
++    SysFreeString( path );
++    IWbemServices_Release( services );
++}
++
+ START_TEST(query)
+ {
+     BSTR path = SysAllocString( L"ROOT\\CIMV2" );
+@@ -2138,6 +2165,7 @@ START_TEST(query)
+     test_Win32_VideoController( services );
+     test_Win32_WinSAT( services );
+     test_SystemRestore( services );
++    test_empty_namespace( locator );
+ 
+     SysFreeString( path );
+     IWbemServices_Release( services );
+From bb727d2e983ba1426ef5de1c5abc3eb2d5ca7361 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 13 Sep 2021 17:13:29 +0300
+Subject: [PATCH] wbemprox: Add Microsoft\\Windows\\Storage namespace.
+
+Fixes Life is Strange: True Colors error on start.
+
+Signed-off-by: Paul Gofman <pgofman@codeweavers.com>
+Signed-off-by: Hans Leidekker <hans@codeweavers.com>
+Signed-off-by: Alexandre Julliard <julliard@winehq.org>
+---
+ dlls/wbemprox/builtin.c          |  1 +
+ dlls/wbemprox/tests/services.c   | 39 ++++++++++++++++++++++++++++++++
+ dlls/wbemprox/wbemprox_private.h |  1 +
+ 3 files changed, 41 insertions(+)
+
+diff --git a/dlls/wbemprox/builtin.c b/dlls/wbemprox/builtin.c
+index ad96182af6b9..442a9015951c 100644
+--- a/dlls/wbemprox/builtin.c
++++ b/dlls/wbemprox/builtin.c
+@@ -4128,6 +4128,7 @@ static const struct
+ builtin_namespaces[WBEMPROX_NAMESPACE_LAST] =
+ {
+     {L"cimv2", cimv2_builtin_classes, ARRAY_SIZE(cimv2_builtin_classes)},
++    {L"Microsoft\\Windows\\Storage", NULL, 0},
+ };
+ 
+ void init_table_list( void )
+diff --git a/dlls/wbemprox/tests/services.c b/dlls/wbemprox/tests/services.c
+index 5ad73e7a8ecb..86ee99c335c0 100644
+--- a/dlls/wbemprox/tests/services.c
++++ b/dlls/wbemprox/tests/services.c
+@@ -247,11 +247,50 @@ todo_wine
+     IWbemContext_Release( context );
+ }
+ 
++static void test_namespaces(void)
++{
++    static const struct
++    {
++        const WCHAR *path;
++        BOOL broken;
++    }
++    tests[] =
++    {
++        {L"ROOT\\CIMV2"},
++        {L"ROOT\\Microsoft\\Windows\\Storage", TRUE /* Before Win8. */},
++    };
++    IWbemLocator *locator;
++    IWbemServices *services;
++    unsigned int i;
++    BSTR resource;
++    HRESULT hr;
++
++    hr = CoCreateInstance( &CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER, &IID_IWbemLocator, (void **)&locator );
++    if (hr != S_OK)
++    {
++        win_skip( "can't create instance of WbemLocator.\n" );
++        return;
++    }
++
++    for (i = 0; i < ARRAY_SIZE( tests ); i++)
++    {
++        resource = SysAllocString( tests[i].path );
++        hr = IWbemLocator_ConnectServer( locator, resource, NULL, NULL, NULL, 0, NULL, NULL, &services );
++        ok( hr == S_OK || broken( tests[i].broken && hr == WBEM_E_INVALID_NAMESPACE ), "%u: got %08x\n", i, hr );
++        SysFreeString( resource );
++        if (hr == S_OK)
++            IWbemServices_Release( services );
++    }
++
++    IWbemLocator_Release( locator );
++}
++
+ START_TEST(services)
+ {
+     CoInitialize( NULL );
+     test_IClientSecurity();
+     test_IWbemLocator();
+     test_IWbemContext();
++    test_namespaces();
+     CoUninitialize();
+ }
+diff --git a/dlls/wbemprox/wbemprox_private.h b/dlls/wbemprox/wbemprox_private.h
+index cd655e542438..6b94bbb9ef6c 100644
+--- a/dlls/wbemprox/wbemprox_private.h
++++ b/dlls/wbemprox/wbemprox_private.h
+@@ -23,6 +23,7 @@
+ enum wbm_namespace
+ {
+     WBEMPROX_NAMESPACE_CIMV2,
++    WBEMPROX_NAMESPACE_MS_WINDOWS_STORAGE,
+     WBEMPROX_NAMESPACE_LAST,
+ };
+ 
+
+@@ -, +, @@ 
+---
+ dlls/wbemprox/builtin.c          | 1 +
+ dlls/wbemprox/wbemprox_private.h | 1 +
+ 2 files changed, 2 insertions(+)
+--- a/dlls/wbemprox/builtin.c	
++++ a/dlls/wbemprox/builtin.c	
+@@ -4129,6 +4129,7 @@ builtin_namespaces[WBEMPROX_NAMESPACE_LAST] =
+ {
+     {L"cimv2", cimv2_builtin_classes, ARRAY_SIZE(cimv2_builtin_classes)},
+     {L"Microsoft\\Windows\\Storage", NULL, 0},
++    {L"wmi", NULL, 0},
+ };
+ 
+ void init_table_list( void )
+--- a/dlls/wbemprox/wbemprox_private.h	
++++ a/dlls/wbemprox/wbemprox_private.h	
+@@ -24,6 +24,7 @@ enum wbm_namespace
+ {
+     WBEMPROX_NAMESPACE_CIMV2,
+     WBEMPROX_NAMESPACE_MS_WINDOWS_STORAGE,
++    WBEMPROX_NAMESPACE_WMI,
+     WBEMPROX_NAMESPACE_LAST,
+ };
+ 
+-- 
+@@ -, +, @@ 
+ stub.
+---
+ .../api-ms-win-power-base-l1-1-0.spec                       | 2 +-
+ dlls/powrprof/powrprof.c                                    | 6 ++++++
+ dlls/powrprof/powrprof.spec                                 | 1 +
+ include/powrprof.h                                          | 2 ++
+ 4 files changed, 10 insertions(+), 1 deletion(-)
+--- a/dlls/api-ms-win-power-base-l1-1-0/api-ms-win-power-base-l1-1-0.spec	
++++ a/dlls/api-ms-win-power-base-l1-1-0/api-ms-win-power-base-l1-1-0.spec	
+@@ -1,5 +1,5 @@ 
+ @ stdcall CallNtPowerInformation(long ptr long ptr long) powrprof.CallNtPowerInformation
+ @ stdcall GetPwrCapabilities(ptr) powrprof.GetPwrCapabilities
+ @ stdcall PowerDeterminePlatformRoleEx(long) powrprof.PowerDeterminePlatformRoleEx
+-@ stub PowerRegisterSuspendResumeNotification
++@ stdcall PowerRegisterSuspendResumeNotification(long ptr ptr) powrprof.PowerRegisterSuspendResumeNotification
+ @ stub PowerUnregisterSuspendResumeNotification
+--- a/dlls/powrprof/powrprof.c	
++++ a/dlls/powrprof/powrprof.c	
+@@ -330,6 +330,12 @@ DWORD WINAPI PowerEnumerate(HKEY key, const GUID *scheme, const GUID *subgroup,
+    return ERROR_CALL_NOT_IMPLEMENTED;
+ }
+ 
++DWORD WINAPI PowerRegisterSuspendResumeNotification(DWORD flags, HANDLE handle, PHPOWERNOTIFY registration)
++{
++   FIXME("(%d,%p,%p) stub!\n", flags, handle, registration);
++   return ERROR_CALL_NOT_IMPLEMENTED;
++}
++
+ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+ {
+    switch(fdwReason) {
+--- a/dlls/powrprof/powrprof.spec	
++++ a/dlls/powrprof/powrprof.spec	
+@@ -17,6 +17,7 @@ 
+ @ stdcall PowerSetActiveScheme (ptr ptr)
+ @ stdcall PowerReadDCValue (ptr ptr ptr ptr ptr ptr ptr)
+ @ stdcall PowerReadFriendlyName (ptr ptr ptr ptr ptr ptr)
++@ stdcall PowerRegisterSuspendResumeNotification(long ptr ptr)
+ @ stdcall ReadGlobalPwrPolicy (ptr)
+ @ stdcall ReadProcessorPwrScheme (long ptr)
+ @ stdcall ReadPwrScheme (long ptr)
+--- a/include/powrprof.h	
++++ a/include/powrprof.h	
+@@ -25,6 +25,8 @@ 
+ #define EnableWakeOnRing		0x08
+ #define EnableVideoDimDisplay		0x10
+ 
++typedef PVOID HPOWERNOTIFY, *PHPOWERNOTIFY;
++
+ typedef struct _GLOBAL_MACHINE_POWER_POLICY {
+ 	ULONG Revision;
+ 	SYSTEM_POWER_STATE LidOpenWakeAc;
+-- 

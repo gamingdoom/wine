@@ -13,6 +13,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 
+VkResult WINAPI vkAcquireFullScreenExclusiveModeEXT(VkDevice device, VkSwapchainKHR swapchain)
+{
+    return unix_funcs->p_vkAcquireFullScreenExclusiveModeEXT(device, swapchain);
+}
+
 VkResult WINAPI vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR *pAcquireInfo, uint32_t *pImageIndex)
 {
     return unix_funcs->p_vkAcquireNextImage2KHR(device, pAcquireInfo, pImageIndex);
@@ -1408,6 +1413,11 @@ VkResult WINAPI vkGetDeviceGroupPresentCapabilitiesKHR(VkDevice device, VkDevice
     return unix_funcs->p_vkGetDeviceGroupPresentCapabilitiesKHR(device, pDeviceGroupPresentCapabilities);
 }
 
+VkResult WINAPI vkGetDeviceGroupSurfacePresentModes2EXT(VkDevice device, const VkPhysicalDeviceSurfaceInfo2KHR *pSurfaceInfo, VkDeviceGroupPresentModeFlagsKHR *pModes)
+{
+    return unix_funcs->p_vkGetDeviceGroupSurfacePresentModes2EXT(device, pSurfaceInfo, pModes);
+}
+
 VkResult WINAPI vkGetDeviceGroupSurfacePresentModesKHR(VkDevice device, VkSurfaceKHR surface, VkDeviceGroupPresentModeFlagsKHR *pModes)
 {
     return unix_funcs->p_vkGetDeviceGroupSurfacePresentModesKHR(device, surface, pModes);
@@ -1693,6 +1703,11 @@ VkResult WINAPI vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice physicalDe
     return unix_funcs->p_vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats);
 }
 
+VkResult WINAPI vkGetPhysicalDeviceSurfacePresentModes2EXT(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR *pSurfaceInfo, uint32_t *pPresentModeCount, VkPresentModeKHR *pPresentModes)
+{
+    return unix_funcs->p_vkGetPhysicalDeviceSurfacePresentModes2EXT(physicalDevice, pSurfaceInfo, pPresentModeCount, pPresentModes);
+}
+
 VkResult WINAPI vkGetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t *pPresentModeCount, VkPresentModeKHR *pPresentModes)
 {
     return unix_funcs->p_vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, pPresentModeCount, pPresentModes);
@@ -1873,6 +1888,11 @@ VkResult WINAPI vkQueueWaitIdle(VkQueue queue)
     return unix_funcs->p_vkQueueWaitIdle(queue);
 }
 
+VkResult WINAPI vkReleaseFullScreenExclusiveModeEXT(VkDevice device, VkSwapchainKHR swapchain)
+{
+    return unix_funcs->p_vkReleaseFullScreenExclusiveModeEXT(device, swapchain);
+}
+
 VkResult WINAPI vkReleasePerformanceConfigurationINTEL(VkDevice device, VkPerformanceConfigurationINTEL configuration)
 {
     return unix_funcs->p_vkReleasePerformanceConfigurationINTEL(device, configuration);
@@ -2015,6 +2035,7 @@ VkResult WINAPI vkWriteAccelerationStructuresPropertiesKHR(VkDevice device, uint
 
 static const struct vulkan_func vk_device_dispatch_table[] =
 {
+    {"vkAcquireFullScreenExclusiveModeEXT", &vkAcquireFullScreenExclusiveModeEXT},
     {"vkAcquireNextImage2KHR", &vkAcquireNextImage2KHR},
     {"vkAcquireNextImageKHR", &vkAcquireNextImageKHR},
     {"vkAcquirePerformanceConfigurationINTEL", &vkAcquirePerformanceConfigurationINTEL},
@@ -2279,6 +2300,7 @@ static const struct vulkan_func vk_device_dispatch_table[] =
     {"vkGetDeviceGroupPeerMemoryFeatures", &vkGetDeviceGroupPeerMemoryFeatures},
     {"vkGetDeviceGroupPeerMemoryFeaturesKHR", &vkGetDeviceGroupPeerMemoryFeaturesKHR},
     {"vkGetDeviceGroupPresentCapabilitiesKHR", &vkGetDeviceGroupPresentCapabilitiesKHR},
+    {"vkGetDeviceGroupSurfacePresentModes2EXT", &vkGetDeviceGroupSurfacePresentModes2EXT},
     {"vkGetDeviceGroupSurfacePresentModesKHR", &vkGetDeviceGroupSurfacePresentModesKHR},
     {"vkGetDeviceMemoryCommitment", &vkGetDeviceMemoryCommitment},
     {"vkGetDeviceMemoryOpaqueCaptureAddress", &vkGetDeviceMemoryOpaqueCaptureAddress},
@@ -2333,6 +2355,7 @@ static const struct vulkan_func vk_device_dispatch_table[] =
     {"vkQueueSubmit", &vkQueueSubmit},
     {"vkQueueSubmit2KHR", &vkQueueSubmit2KHR},
     {"vkQueueWaitIdle", &vkQueueWaitIdle},
+    {"vkReleaseFullScreenExclusiveModeEXT", &vkReleaseFullScreenExclusiveModeEXT},
     {"vkReleasePerformanceConfigurationINTEL", &vkReleasePerformanceConfigurationINTEL},
     {"vkReleaseProfilingLockKHR", &vkReleaseProfilingLockKHR},
     {"vkResetCommandBuffer", &vkResetCommandBuffer},
@@ -2406,6 +2429,7 @@ static const struct vulkan_func vk_phys_dev_dispatch_table[] =
     {"vkGetPhysicalDeviceSurfaceCapabilitiesKHR", &vkGetPhysicalDeviceSurfaceCapabilitiesKHR},
     {"vkGetPhysicalDeviceSurfaceFormats2KHR", &vkGetPhysicalDeviceSurfaceFormats2KHR},
     {"vkGetPhysicalDeviceSurfaceFormatsKHR", &vkGetPhysicalDeviceSurfaceFormatsKHR},
+    {"vkGetPhysicalDeviceSurfacePresentModes2EXT", &vkGetPhysicalDeviceSurfacePresentModes2EXT},
     {"vkGetPhysicalDeviceSurfacePresentModesKHR", &vkGetPhysicalDeviceSurfacePresentModesKHR},
     {"vkGetPhysicalDeviceSurfaceSupportKHR", &vkGetPhysicalDeviceSurfaceSupportKHR},
     {"vkGetPhysicalDeviceToolPropertiesEXT", &vkGetPhysicalDeviceToolPropertiesEXT},

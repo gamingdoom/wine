@@ -1302,7 +1302,17 @@ static void pad_added_cb(GstElement *element, GstPad *pad, gpointer user)
 
     if (!strcmp(name, "video/x-raw"))
     {
-        GstElement *deinterlace, *vconv, *flip, *videobox, *vconv2;
+        GstElement *capssetter, *deinterlace, *vconv, *flip, *videobox, *vconv2;
+        /* Hack?: Flatten down the colorimetry to default values, without
+         * actually modifying the video at all.*/
+        if (!(capssetter = gst_element_factory_make("capssetter", NULL)))
+        {
+            GST_ERROR("Failed to create capssetter, are %u-bit GStreamer \"good\" plugins installed?\n",
+                    8 * (int)sizeof(void *));
+            goto out;
+        }
+        gst_util_set_object_arg(G_OBJECT(capssetter), "join", "true");
+        gst_util_set_object_arg(G_OBJECT(capssetter), "caps", "video/x-raw,colorimetry=0:0:0:0");
 
         /* DirectShow can express interlaced video, but downstream filters can't
          * necessarily consume it. In particular, the video renderer can't. */
@@ -1314,6 +1324,9 @@ static void pad_added_cb(GstElement *element, GstPad *pad, gpointer user)
          * formats either. Add a videoconvert to swap color spaces. */
         if (!(vconv = create_element("videoconvert", "base")))
             goto out;
+
+        /* Let GStreamer choose a default number of threads. */
+        gst_util_set_object_arg(G_OBJECT(vconv), "n-threads", "0");
 
         /* GStreamer outputs RGB video top-down, but DirectShow expects bottom-up. */
         if (!(flip = create_element("videoflip", "good")))
@@ -1347,6 +1360,8 @@ static void pad_added_cb(GstElement *element, GstPad *pad, gpointer user)
         }
 
         /* The bin takes ownership of these elements. */
+        gst_bin_add(GST_BIN(parser->container), capssetter);
+        gst_element_sync_state_with_parent(capssetter);
         gst_bin_add(GST_BIN(parser->container), deinterlace);
         gst_element_sync_state_with_parent(deinterlace);
         gst_bin_add(GST_BIN(parser->container), vconv);
@@ -1361,6 +1376,7 @@ static void pad_added_cb(GstElement *element, GstPad *pad, gpointer user)
         gst_bin_add(GST_BIN(parser->container), vconv2);
         gst_element_sync_state_with_parent(vconv2);
 
+        gst_element_link(capssetter, deinterlace);
         gst_element_link(deinterlace, vconv);
         gst_element_link(vconv, flip);
         if (videobox)
@@ -1373,7 +1389,7 @@ static void pad_added_cb(GstElement *element, GstPad *pad, gpointer user)
             gst_element_link(flip, vconv2);
         }
 
-        stream->post_sink = gst_element_get_static_pad(deinterlace, "sink");
+        stream->post_sink = gst_element_get_static_pad(capssetter, "sink");
         stream->post_src = gst_element_get_static_pad(vconv2, "src");
         stream->flip = flip;
         stream->box = videobox;
@@ -2205,6 +2221,10 @@ static BOOL decodebin_parser_init_gst(struct wg_parser *parser)
     g_signal_connect(element, "pad-removed", G_CALLBACK(pad_removed_cb), parser);
     g_signal_connect(element, "autoplug-select", G_CALLBACK(autoplug_select_cb), parser);
     g_signal_connect(element, "no-more-pads", G_CALLBACK(no_more_pads_cb), parser);
+
+    g_object_set(G_OBJECT(element), "max-size-buffers", G_MAXUINT, NULL);
+    g_object_set(G_OBJECT(element), "max-size-time", G_MAXUINT64, NULL);
+    g_object_set(G_OBJECT(element), "max-size-bytes", G_MAXUINT, NULL);
 
     parser->their_sink = gst_element_get_static_pad(element, "sink");
 
