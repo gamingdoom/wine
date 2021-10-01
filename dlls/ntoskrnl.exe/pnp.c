@@ -350,20 +350,21 @@ static void enumerate_new_device( DEVICE_OBJECT *device, HDEVINFO set )
     start_device( device, set, &sp_device );
 }
 
-static void send_remove_device_irp( DEVICE_OBJECT *device, UCHAR code )
+static void remove_device( DEVICE_OBJECT *device )
 {
     struct wine_device *wine_device = CONTAINING_RECORD(device, struct wine_device, device_obj);
 
-    TRACE( "Removing device %p, code %x.\n", device, code );
+    TRACE("Removing device %p.\n", device);
 
     if (wine_device->children)
     {
         ULONG i;
         for (i = 0; i < wine_device->children->Count; ++i)
-            send_remove_device_irp( wine_device->children->Objects[i], code );
+            remove_device( wine_device->children->Objects[i] );
     }
 
-    send_pnp_irp( device, code );
+    send_pnp_irp( device, IRP_MN_SURPRISE_REMOVAL );
+    send_pnp_irp( device, IRP_MN_REMOVE_DEVICE );
 }
 
 static BOOL device_in_list( const DEVICE_RELATIONS *list, const DEVICE_OBJECT *device )
@@ -440,8 +441,7 @@ static void handle_bus_relations( DEVICE_OBJECT *parent )
             if (!device_in_list( relations, child ))
             {
                 TRACE("Removing device %p.\n", child);
-                send_remove_device_irp( child, IRP_MN_SURPRISE_REMOVAL );
-                send_remove_device_irp( child, IRP_MN_REMOVE_DEVICE );
+                remove_device( child );
             }
             ObDereferenceObject( child );
         }
@@ -1105,10 +1105,7 @@ void pnp_manager_stop_driver( struct wine_driver *driver )
     struct root_pnp_device *device, *next;
 
     LIST_FOR_EACH_ENTRY_SAFE( device, next, &driver->root_pnp_devices, struct root_pnp_device, entry )
-    {
-        send_remove_device_irp( device->device, IRP_MN_SURPRISE_REMOVAL );
-        send_remove_device_irp( device->device, IRP_MN_REMOVE_DEVICE );
-    }
+        remove_device( device->device );
 }
 
 void pnp_manager_stop(void)
@@ -1182,8 +1179,7 @@ void CDECL wine_enumerate_root_devices( const WCHAR *driver_name )
     {
         TRACE("Removing device %s.\n", debugstr_w(pnp_device->id));
 
-        send_remove_device_irp( pnp_device->device, IRP_MN_SURPRISE_REMOVAL );
-        send_remove_device_irp( pnp_device->device, IRP_MN_REMOVE_DEVICE );
+        remove_device( pnp_device->device );
     }
 
     list_move_head( &driver->root_pnp_devices, &new_list );

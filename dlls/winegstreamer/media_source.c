@@ -936,7 +936,7 @@ static HRESULT WINAPI media_source_rate_support_GetSlowestRate(IMFRateSupport *i
 {
     TRACE("%p, %d, %d, %p.\n", iface, direction, thin, rate);
 
-    *rate = 0.0f;
+    *rate = direction == MFRATE_FORWARD ? 1.0f : -1e6f;
 
     return S_OK;
 }
@@ -945,7 +945,7 @@ static HRESULT WINAPI media_source_rate_support_GetFastestRate(IMFRateSupport *i
 {
     TRACE("%p, %d, %d, %p.\n", iface, direction, thin, rate);
 
-    *rate = direction == MFRATE_FORWARD ? 1e6f : -1e6f;
+    *rate = direction == MFRATE_FORWARD ? 1e6f : -1.0f;
 
     return S_OK;
 }

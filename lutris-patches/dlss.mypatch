@@ -1,0 +1,52 @@
+From f94a37fe0bfe491161aa8cc0e8491ddb854f3f61 Mon Sep 17 00:00:00 2001
+From: Liam Middlebrook <lmiddlebrook@nvidia.com>
+Date: Wed, 8 Sep 2021 11:30:28 -0700
+Subject: [PATCH] nvcuda: Add stub DLL
+
+This is needed for DLSS versions 2.1.38 through 2.1.40 to work within
+Proton, as they contain a link-time dependency on nvcuda.dll. In the
+case of what is needed by DLSS, no ordinals need to be exported for
+nvcuda.dll to successfully load.
+
+Signed-off-by: Liam Middlebrook <lmiddlebrook@nvidia.com>
+---
+ configure               | 2 ++
+ configure.ac            | 1 +
+ dlls/nvcuda/Makefile.in | 1 +
+ dlls/nvcuda/nvcuda.spec | 0
+ 4 files changed, 4 insertions(+)
+ create mode 100644 dlls/nvcuda/Makefile.in
+ create mode 100644 dlls/nvcuda/nvcuda.spec
+
+diff --git a/configure b/configure
+index b0e24bd4fec..da2db81ad9d 100755
+--- a/configure
++++ b/configure
+@@ -1527,6 +1527,7 @@ enable_ntdll
+ enable_ntdsapi
+ enable_ntoskrnl_exe
+ enable_ntprint
++enable_nvcuda
+ enable_objsel
+ enable_odbc32
+ enable_odbcbcp
+@@ -21119,6 +21120,7 @@ wine_fn_config_makefile dlls/ntoskrnl.exe enable_ntoskrnl_exe
+ wine_fn_config_makefile dlls/ntoskrnl.exe/tests enable_tests
+ wine_fn_config_makefile dlls/ntprint enable_ntprint
+ wine_fn_config_makefile dlls/ntprint/tests enable_tests
++wine_fn_config_makefile dlls/nvcuda enable_nvcuda
+ wine_fn_config_makefile dlls/objsel enable_objsel
+ wine_fn_config_makefile dlls/odbc32 enable_odbc32
+ wine_fn_config_makefile dlls/odbcbcp enable_odbcbcp
+diff --git a/configure.ac b/configure.ac
+index 7f6d2207d87..d31963f3653 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -3604,6 +3604,7 @@ WINE_CONFIG_MAKEFILE(dlls/ntoskrnl.exe)
+ WINE_CONFIG_MAKEFILE(dlls/ntoskrnl.exe/tests)
+ WINE_CONFIG_MAKEFILE(dlls/ntprint)
+ WINE_CONFIG_MAKEFILE(dlls/ntprint/tests)
++WINE_CONFIG_MAKEFILE(dlls/nvcuda)
+ WINE_CONFIG_MAKEFILE(dlls/objsel)
+ WINE_CONFIG_MAKEFILE(dlls/odbc32)
+ WINE_CONFIG_MAKEFILE(dlls/odbcbcp)
