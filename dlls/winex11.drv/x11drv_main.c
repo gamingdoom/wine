@@ -66,7 +66,7 @@ Colormap default_colormap = None;
 XPixmapFormatValues **pixmap_formats;
 unsigned int screen_bpp;
 Window root_window;
-BOOL usexvidmode = TRUE;
+BOOL usexvidmode = FALSE;
 BOOL usexrandr = TRUE;
 BOOL usexcomposite = TRUE;
 BOOL use_xkb = TRUE;
@@ -85,6 +85,7 @@ BOOL client_side_with_render = TRUE;
 BOOL shape_layered_windows = TRUE;
 int copy_default_colors = 128;
 int alloc_system_colors = 256;
+int limit_number_of_resolutions = 0;
 DWORD thread_data_tls_index = TLS_OUT_OF_INDEXES;
 int xrender_error_base = 0;
 HMODULE x11drv_module = 0;
@@ -138,7 +139,6 @@ static const char * const atom_names[NB_XATOMS - FIRST_XATOM] =
 {
     "CLIPBOARD",
     "COMPOUND_TEXT",
-    "EDID",
     "INCR",
     "MANAGER",
     "MULTIPLE",
@@ -147,6 +147,7 @@ static const char * const atom_names[NB_XATOMS - FIRST_XATOM] =
     "TEXT",
     "TIMESTAMP",
     "UTF8_STRING",
+    "STRING",
     "RAW_ASCENT",
     "RAW_DESCENT",
     "RAW_CAP_HEIGHT",
@@ -154,19 +155,21 @@ static const char * const atom_names[NB_XATOMS - FIRST_XATOM] =
     "Rel Y",
     "WM_PROTOCOLS",
     "WM_DELETE_WINDOW",
+    "WM_NAME",
     "WM_STATE",
     "WM_TAKE_FOCUS",
     "DndProtocol",
     "DndSelection",
     "_ICC_PROFILE",
     "_MOTIF_WM_HINTS",
-    "_NET_ACTIVE_WINDOW",
     "_NET_STARTUP_INFO_BEGIN",
     "_NET_STARTUP_INFO",
     "_NET_SUPPORTED",
+    "_NET_SUPPORTING_WM_CHECK",
     "_NET_SYSTEM_TRAY_OPCODE",
     "_NET_SYSTEM_TRAY_S0",
     "_NET_SYSTEM_TRAY_VISUAL",
+    "_NET_WM_BYPASS_COMPOSITOR",
     "_NET_WM_ICON",
     "_NET_WM_MOVERESIZE",
     "_NET_WM_NAME",
@@ -214,6 +217,7 @@ static const char * const atom_names[NB_XATOMS - FIRST_XATOM] =
     "WCF_SYLK",
     "WCF_TIFF",
     "WCF_WAVE",
+    "WINDOW",
     "image/bmp",
     "image/gif",
     "image/jpeg",
@@ -318,6 +322,9 @@ static int error_handler( Display *display, XErrorEvent *error_evt )
              error_evt->serial, error_evt->request_code );
         DebugBreak();  /* force an entry in the debugger */
     }
+    TRACE("passing on error %d req %d:%d res 0x%lx\n",
+            error_evt->error_code, error_evt->request_code,
+            error_evt->minor_code, error_evt->resourceid);
     old_error_handler( display, error_evt );
     return 0;
 }
@@ -449,6 +456,9 @@ static void setup_options(void)
 
     if (!get_config_key( hkey, appkey, "AllocSystemColors", buffer, sizeof(buffer) ))
         alloc_system_colors = atoi(buffer);
+
+    if (!get_config_key( hkey, appkey, "LimitNumberOfResolutions", buffer, sizeof(buffer) ))
+        limit_number_of_resolutions = atoi(buffer);
 
     get_config_key( hkey, appkey, "InputStyle", input_style, sizeof(input_style) );
 
@@ -587,6 +597,13 @@ static BOOL process_attach(void)
     dlopen( SONAME_LIBXEXT, RTLD_NOW|RTLD_GLOBAL );
 #endif
 
+    {
+        const char *e = getenv("WINE_ALLOW_XIM");
+        if(e){
+            use_xim = IS_OPTION_TRUE(*e);
+        }
+    }
+
     setup_options();
 
     if ((thread_data_tls_index = TlsAlloc()) == TLS_OUT_OF_INDEXES) return FALSE;
@@ -633,6 +650,8 @@ static BOOL process_attach(void)
     X11DRV_InitMouse( gdi_display );
     if (use_xim) use_xim = X11DRV_InitXIM( input_style );
 
+    fs_hack_init();
+
     X11DRV_DisplayDevices_Init(FALSE);
     return TRUE;
 }
@@ -647,7 +666,6 @@ void CDECL X11DRV_ThreadDetach(void)
 
     if (data)
     {
-        vulkan_thread_detach();
         if (GetWindowThreadProcessId( GetDesktopWindow(), NULL ) == GetCurrentThreadId())
             x11drv_xinput_disable( data->display, DefaultRootWindow( data->display ), PointerMotionMask );
         if (data->xim) XCloseIM( data->xim );

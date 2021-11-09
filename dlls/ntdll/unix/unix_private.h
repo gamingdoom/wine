@@ -54,6 +54,7 @@ struct ntdll_thread_data
     void              *cpu_data[16];  /* reserved for CPU-specific data */
     void              *kernel_stack;  /* stack for thread startup and kernel syscalls */
     int                esync_apc_fd;  /* fd to wait on for user APCs */
+    int               *fsync_apc_futex;
     int                request_fd;    /* fd for sending server requests */
     int                reply_fd;      /* fd for receiving server replies */
     int                wait_fd[2];    /* fd for sleeping server requests */
@@ -103,7 +104,20 @@ extern void     (WINAPI *pLdrInitializeThunk)(CONTEXT*,void**,ULONG_PTR,ULONG_PT
 extern void     (WINAPI *pRtlUserThreadStart)( PRTL_THREAD_START_ROUTINE entry, void *arg ) DECLSPEC_HIDDEN;
 extern void     (WINAPI *p__wine_ctrl_routine)(void *) DECLSPEC_HIDDEN;
 extern SYSTEM_DLL_INIT_BLOCK *pLdrSystemDllInitBlock DECLSPEC_HIDDEN;
+
+extern NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlTryAcquireSRWLockShared( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlAcquireSRWLockShared( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlReleaseSRWLockExclusive( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlReleaseSRWLockShared( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable, int count ) DECLSPEC_HIDDEN;
 extern LONGLONG CDECL fast_RtlGetSystemTimePrecise(void) DECLSPEC_HIDDEN;
+extern NTSTATUS CDECL fast_wait_cv( RTL_CONDITION_VARIABLE *variable, const void *value,
+                                    const LARGE_INTEGER *timeout ) DECLSPEC_HIDDEN;
 
 extern NTSTATUS CDECL unwind_builtin_dll( ULONG type, struct _DISPATCHER_CONTEXT *dispatch,
                                           CONTEXT *context ) DECLSPEC_HIDDEN;
@@ -141,6 +155,8 @@ extern BOOL is_wow64 DECLSPEC_HIDDEN;
 #ifdef __i386__
 extern struct ldt_copy __wine_ldt_copy DECLSPEC_HIDDEN;
 #endif
+
+extern BOOL ac_odyssey DECLSPEC_HIDDEN;
 
 extern void init_environment( int argc, char *argv[], char *envp[] ) DECLSPEC_HIDDEN;
 extern void init_startup_info(void) DECLSPEC_HIDDEN;
@@ -538,5 +554,7 @@ static inline void init_unicode_string( UNICODE_STRING *str, const WCHAR *data )
     str->MaximumLength = str->Length + sizeof(WCHAR);
     str->Buffer = (WCHAR *)data;
 }
+
+BOOL CDECL __wine_needs_override_large_address_aware(void);
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */
