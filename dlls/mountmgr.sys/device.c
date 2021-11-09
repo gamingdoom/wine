@@ -1914,6 +1914,19 @@ static NTSTATUS query_property( struct disk_device *device, IRP *irp )
 
         break;
     }
+    case StorageDeviceSeekPenaltyProperty:
+    {
+        DEVICE_SEEK_PENALTY_DESCRIPTOR *descriptor;
+        FIXME( "Faking StorageDeviceSeekPenaltyProperty data\n" );
+        memset( irp->AssociatedIrp.SystemBuffer, 0, irpsp->Parameters.DeviceIoControl.OutputBufferLength );
+        descriptor = irp->AssociatedIrp.SystemBuffer;
+        descriptor->Version = sizeof(DEVICE_SEEK_PENALTY_DESCRIPTOR);
+        descriptor->Size = sizeof(DEVICE_SEEK_PENALTY_DESCRIPTOR);
+        /* Assume no penalty, SSDs are common enough */
+        descriptor->IncursSeekPenalty = FALSE;
+        status = STATUS_SUCCESS;
+        break;
+    }
     default:
         FIXME( "Unsupported property %#x\n", query->PropertyId );
         status = STATUS_NOT_SUPPORTED;
