@@ -30,7 +30,6 @@
     SYSCALL_ENTRY( NtAdjustPrivilegesToken ) \
     SYSCALL_ENTRY( NtAlertResumeThread ) \
     SYSCALL_ENTRY( NtAlertThread ) \
-    SYSCALL_ENTRY( NtAlertThreadByThreadId ) \
     SYSCALL_ENTRY( NtAllocateLocallyUniqueId ) \
     SYSCALL_ENTRY( NtAllocateUuids ) \
     SYSCALL_ENTRY( NtAllocateVirtualMemory ) \
@@ -232,7 +231,6 @@
     SYSCALL_ENTRY( NtUnlockFile ) \
     SYSCALL_ENTRY( NtUnlockVirtualMemory ) \
     SYSCALL_ENTRY( NtUnmapViewOfSection ) \
-    SYSCALL_ENTRY( NtWaitForAlertByThreadId ) \
     SYSCALL_ENTRY( NtWaitForDebugEvent ) \
     SYSCALL_ENTRY( NtWaitForKeyedEvent ) \
     SYSCALL_ENTRY( NtWaitForMultipleObjects ) \
