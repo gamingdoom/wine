@@ -505,11 +505,20 @@ static void pulse_probe_settings(int render, WAVEFORMATEXTENSIBLE *fmt) {
     if (length)
         pulse_def_period[!render] = pulse_min_period[!render] = pa_bytes_to_usec(10 * length, &ss);
 
-    if (pulse_min_period[!render] < MinimumPeriod)
-        pulse_min_period[!render] = MinimumPeriod;
-
-    if (pulse_def_period[!render] < DefaultPeriod)
-        pulse_def_period[!render] = DefaultPeriod;
+    const char *penv = getenv("STAGING_AUDIO_PERIOD");
+    if (penv) {
+        int val = atoi(penv);
+        if (val > 0) {
+            pulse_def_period[!render] = pulse_min_period[!render] = val;
+            printf("Audio period set to %d.\n", val);
+        }
+        else if (val < 0) {
+            if (pulse_min_period[!render] < MinimumPeriod)
+                pulse_min_period[!render] = MinimumPeriod;
+            if (pulse_def_period[!render] < DefaultPeriod)
+                pulse_def_period[!render] = DefaultPeriod;
+        }
+    }
 
     wfx->wFormatTag = WAVE_FORMAT_EXTENSIBLE;
     wfx->cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
@@ -859,6 +868,13 @@ static NTSTATUS pulse_create_stream(void *args)
     period = pulse_def_period[stream->dataflow == eCapture];
     if (duration < 3 * period)
         duration = 3 * period;
+
+    const char *denv = getenv("STAGING_AUDIO_DURATION");
+    if (denv) {
+        int val = atoi(denv);
+        duration = val;
+        printf("Staging audio duration set to %d.\n", val);
+    }
 
     stream->period_bytes = pa_frame_size(&stream->ss) * muldiv(period, stream->ss.rate, 10000000);
 
