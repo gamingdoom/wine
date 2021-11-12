@@ -541,8 +541,6 @@ static BOOL has_output_pins(IBaseFilter *filter)
 
 static void update_seeking(struct filter *filter)
 {
-    IMediaSeeking *seeking;
-
     if (!filter->seeking)
     {
         /* The Legend of Heroes: Trails of Cold Steel II destroys its filter when
@@ -551,19 +549,13 @@ static void update_seeking(struct filter *filter)
          * Some filters (e.g. MediaStreamFilter) can become seekable when they are
          * already in the graph, so always try to query IMediaSeeking if it's not
          * cached yet. */
-        if (SUCCEEDED(IBaseFilter_QueryInterface(filter->filter, &IID_IMediaSeeking, (void **)&seeking)))
-        {
-            if (IMediaSeeking_IsFormatSupported(seeking, &TIME_FORMAT_MEDIA_TIME) == S_OK)
-                filter->seeking = seeking;
-            else
-                IMediaSeeking_Release(seeking);
-        }
+        if (FAILED(IBaseFilter_QueryInterface(filter->filter, &IID_IMediaSeeking, (void **)&filter->seeking)))
+            filter->seeking = NULL;
     }
 }
 
 static BOOL is_renderer(struct filter *filter)
 {
-    IMediaPosition *media_position;
     IAMFilterMiscFlags *flags;
     BOOL ret = FALSE;
 
@@ -572,12 +564,6 @@ static BOOL is_renderer(struct filter *filter)
         if (IAMFilterMiscFlags_GetMiscFlags(flags) & AM_FILTER_MISC_FLAGS_IS_RENDERER)
             ret = TRUE;
         IAMFilterMiscFlags_Release(flags);
-    }
-    else if (SUCCEEDED(IBaseFilter_QueryInterface(filter->filter, &IID_IMediaPosition, (void **)&media_position)))
-    {
-        if (!has_output_pins(filter->filter))
-            ret = TRUE;
-        IMediaPosition_Release(media_position);
     }
     else
     {
@@ -5587,10 +5573,27 @@ static const IUnknownVtbl IInner_VTable =
     FilterGraphInner_Release
 };
 
+static BOOL CALLBACK register_winegstreamer_proc(INIT_ONCE *once, void *param, void **ctx)
+{
+    HMODULE mod = LoadLibraryW(L"winegstreamer.dll");
+    if (mod)
+    {
+        HRESULT (WINAPI *proc)(void) = (void *)GetProcAddress(mod, "DllRegisterServer");
+        proc();
+        FreeLibrary(mod);
+    }
+    return TRUE;
+}
+
 static HRESULT filter_graph_common_create(IUnknown *outer, IUnknown **out, BOOL threaded)
 {
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
     struct filter_graph *object;
     HRESULT hr;
+
+    /* HACK: our build system makes it difficult to load gstreamer on prefix
+     * creation, so it won't get registered. Do that here instead. */
+    InitOnceExecuteOnce(&once, register_winegstreamer_proc, NULL, NULL);
 
     *out = NULL;
 
