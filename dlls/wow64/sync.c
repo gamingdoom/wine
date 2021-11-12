@@ -1587,3 +1587,26 @@ NTSTATUS WINAPI wow64_NtYieldExecution( UINT *args )
 {
     return NtYieldExecution();
 }
+
+
+/**********************************************************************
+ *           wow64_NtAlertThreadByThreadId
+ */
+NTSTATUS WINAPI wow64_NtAlertThreadByThreadId( UINT *args )
+{
+    HANDLE tid = get_handle( &args );
+
+    return NtAlertThreadByThreadId( tid );
+}
+
+
+/**********************************************************************
+ *           wow64_NtWaitForAlertByThreadId
+ */
+NTSTATUS WINAPI wow64_NtWaitForAlertByThreadId( UINT *args )
+{
+    const void *address = get_ptr( &args );
+    const LARGE_INTEGER *timeout = get_ptr( &args );
+
+    return NtWaitForAlertByThreadId( address, timeout );
+}
