@@ -915,7 +915,7 @@ static SECURITY_STATUS SEC_ENTRY schan_InitializeSecurityContextW(
         ptsExpiry->HighPart = 0;
     }
 
-    if (!phContext)
+    if (!phContext || (phNewContext && !pInput))
     {
         ULONG_PTR handle;
 
