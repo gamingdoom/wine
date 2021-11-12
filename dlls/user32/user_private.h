@@ -94,6 +94,7 @@ typedef struct tagUSER_DRIVER {
     DWORD  (CDECL *pMsgWaitForMultipleObjectsEx)(DWORD,const HANDLE*,DWORD,DWORD,DWORD);
     void   (CDECL *pReleaseDC)(HWND,HDC);
     BOOL   (CDECL *pScrollDC)(HDC,INT,INT,HRGN);
+    void   (CDECL *pSetActiveWindow)(HWND);
     void   (CDECL *pSetCapture)(HWND,UINT);
     void   (CDECL *pSetFocus)(HWND);
     void   (CDECL *pSetLayeredWindowAttributes)(HWND,COLORREF,BYTE,DWORD);
@@ -110,6 +111,8 @@ typedef struct tagUSER_DRIVER {
     void   (CDECL *pWindowPosChanged)(HWND,HWND,UINT,const RECT *,const RECT *,const RECT *,const RECT *,struct window_surface*);
     /* system parameters */
     BOOL   (CDECL *pSystemParametersInfo)(UINT,UINT,void*,UINT);
+    /* candidate pos functions */
+    void   (CDECL *pUpdateCandidatePos)(HWND,const RECT *);
     /* thread management */
     void   (CDECL *pThreadDetach)(void);
 } USER_DRIVER;
