@@ -1,0 +1,139 @@
+# Last wine-tkg-staging-fsync-git configuration - Сб 13 ноя 2021 23:34:44 MSK :
+
+External configuration file ~/git_projects/buildbot/runners/wine/build-preparation/wine-tkg-git/wine-tkg.cfg used
+
+Wine (plain) version: 6.21.r0.g20f1a677b66
+Using wine-staging patchset (version 6.21.r0.g63c3baa9)
+
+Disabled the local Esync patchset to use Staging impl instead.
+Not using vkd3d native library for d3d12 translation (allows using vkd3d-proton)
+
+Done applying reverting hotfixes (if any) - list available in prepare.log
+
+Applied reverting hotfix 6fd31b3.mystagingrevert
+Applied hotfix staging-6dcaff42.mystagingpatch
+Applied hotfix protonify_stg_syscall_emu-007.mystagingpatch
+Applied hotfix 0001-Revert-winegstreamer-Get-rid-of-the-WMReader-typedef.myearlypatch
+Applied hotfix 0002-Revert-wmvcore-Move-the-async-reader-implementation-.myearlypatch
+Applied hotfix 0003-Revert-winegstreamer-Get-rid-of-the-WMSyncReader-typ.myearlypatch
+Applied hotfix 0004-Revert-wmvcore-Move-the-sync-reader-implementation-t.myearlypatch
+Applied hotfix 0005-Revert-winegstreamer-Translate-GST_AUDIO_CHANNEL_POS.myearlypatch
+Applied hotfix 0006-Revert-winegstreamer-Trace-the-unfiltered-caps-in-si.myearlypatch
+Applied hotfix 0007-Revert-winegstreamer-Avoid-seeking-past-the-end-of-a.myearlypatch
+Applied hotfix 0008-Revert-winegstreamer-Avoid-passing-a-NULL-buffer-to-.myearlypatch
+Applied hotfix 0009-Revert-winegstreamer-Use-array_reserve-to-reallocate.myearlypatch
+Applied hotfix 0010-Revert-winegstreamer-Handle-zero-length-reads-in-src.myearlypatch
+Applied hotfix 0011-Revert-winegstreamer-Convert-the-Unix-library-to-the.myearlypatch
+Applied hotfix 0012-Revert-winegstreamer-Return-void-from-wg_parser_stre.myearlypatch
+Applied hotfix 0013-Revert-winegstreamer-Move-Unix-library-definitions-i.myearlypatch
+Applied hotfix 0014-Revert-winegstreamer-Remove-the-no-longer-used-start.myearlypatch
+Applied hotfix 0015-Revert-winegstreamer-Set-unlimited-buffering-using-a.myearlypatch
+Applied hotfix 0016-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.myearlypatch
+Applied hotfix 0017-Revert-winegstreamer-Use-a-single-wg_parser_create-e.myearlypatch
+Applied hotfix 0018-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.myearlypatch
+Applied hotfix 0019-Revert-winegstreamer-Allocate-source-media-buffers-i.myearlypatch
+Applied hotfix 0020-Revert-winegstreamer-Duplicate-source-shutdown-path-.myearlypatch
+Applied hotfix 0021-Revert-winegstreamer-Properly-clean-up-from-failure-.myearlypatch
+Applied hotfix 0022-Revert-winegstreamer-Factor-out-more-of-the-init_gst.myearlypatch
+Applied hotfix 0001-winegstreamer-Activate-source-pad-in-push-mode-if-it.myearlypatch
+Applied hotfix 0002-winegstreamer-Push-stream-start-and-segment-events-i.myearlypatch
+Applied hotfix 0003-winegstreamer-Introduce-H.264-decoder-transform.myearlypatch
+Applied hotfix 0004-winegstreamer-Implement-GetInputAvailableType-for-de.myearlypatch
+Applied hotfix 0005-winegstreamer-Implement-GetOutputAvailableType-for-d.myearlypatch
+Applied hotfix 0006-winegstreamer-Implement-SetInputType-for-decode-tran.myearlypatch
+Applied hotfix 0007-winegstreamer-Implement-SetOutputType-for-decode-tra.myearlypatch
+Applied hotfix 0008-winegstreamer-Implement-Get-Input-Output-StreamInfo-.myearlypatch
+Applied hotfix 0009-winegstreamer-Add-push-mode-path-for-wg_parser.myearlypatch
+Applied hotfix 0010-winegstreamer-Implement-Process-Input-Output-for-dec.myearlypatch
+Applied hotfix 0011-winestreamer-Implement-ProcessMessage-for-decoder-tr.myearlypatch
+Applied hotfix 0012-winegstreamer-Semi-stub-GetAttributes-for-decoder-tr.myearlypatch
+Applied hotfix 0013-winegstreamer-Register-the-H.264-decoder-transform.myearlypatch
+Applied hotfix 0014-winegstreamer-Introduce-AAC-decoder-transform.myearlypatch
+Applied hotfix 0015-winegstreamer-Register-the-AAC-decoder-transform.myearlypatch
+Applied hotfix 0016-winegstreamer-Rename-GStreamer-objects-to-be-more-ge.myearlypatch
+Applied hotfix 0017-winegstreamer-Report-streams-backwards-in-media-sour.myearlypatch
+Applied hotfix 0018-winegstreamer-Implement-Process-Input-Output-for-aud.myearlypatch
+Applied hotfix 0019-winegstreamer-Implement-Get-Input-Output-StreamInfo-.myearlypatch
+Applied hotfix 0020-winegstreamer-Semi-stub-Get-Attributes-functions-for.myearlypatch
+Applied hotfix 0021-winegstreamer-Introduce-color-conversion-transform.myearlypatch
+Applied hotfix 0022-winegstreamer-Register-the-color-conversion-transfor.myearlypatch
+Applied hotfix 0023-winegstreamer-Implement-GetInputAvailableType-for-co.myearlypatch
+Applied hotfix 0024-winegstreamer-Implement-SetInputType-for-color-conve.myearlypatch
+Applied hotfix 0025-winegstreamer-Implement-GetOutputAvailableType-for-c.myearlypatch
+Applied hotfix 0026-winegstreamer-Implement-SetOutputType-for-color-conv.myearlypatch
+Applied hotfix 0027-winegstreamer-Implement-Process-Input-Output-for-col.myearlypatch
+Applied hotfix 0028-winegstreamer-Implement-ProcessMessage-for-color-con.myearlypatch
+Applied hotfix 0029-winegstreamer-Implement-Get-Input-Output-StreamInfo-.myearlypatch
+Applied hotfix 0030-mf-topology-Forward-failure-from-SetOutputType-when-.myearlypatch
+Applied hotfix 0031-winegstreamer-Handle-flush-command-in-audio-converst.myearlypatch
+Applied hotfix 0032-winegstreamer-In-the-default-configuration-select-on.myearlypatch
+Applied hotfix 0033-winegstreamer-Implement-MF_SD_LANGUAGE.myearlypatch
+Applied hotfix 0034-winegstreamer-Only-require-videobox-element-for-pars.myearlypatch
+Applied hotfix 0035-winegstreamer-Don-t-rely-on-max_size-in-unseekable-p.myearlypatch
+Applied hotfix 0036-winegstreamer-Implement-MFT_MESSAGE_COMMAND_FLUSH-fo.myearlypatch
+Applied hotfix 0037-winegstreamer-Default-Frame-size-if-one-isn-t-availa.myearlypatch
+Applied hotfix 0038-mfplat-Stub-out-MFCreateDXGIDeviceManager-to-avoid-t.myearlypatch
+steam.patch -- ( Applied steam crossover hack )
+CSMT-toggle.patch -- ( Applied CSMT toggle logic patch )
+
+Staging overrides, if any: -W ntdll-NtAlertThreadByThreadId -W winex11-_NET_ACTIVE_WINDOW -W winex11-WM_WINDOWPOSCHANGING -W winemenubuilder-integration -W dwrite-FontFallback -W winex11-WM_WINDOWPOSCHANGING -W winex11-_NET_ACTIVE_WINDOW
+
+use_clock_monotonic-staging.patch -- ( Applied clock_monotonic patch )
+ffxiv-launcher-workaround.patch -- ( Applied Final Fantasy XIV Launcher fix )
+fsync-unix-staging.patch -- ( Applied fsync, an experimental replacement for esync (unix, staging) )
+fsync_futex_waitv.patch -- ( Replace all fsync interfaces with futex_waitv )
+
+valve_proton_fullscreen_hack-staging-d1290b6.patch -- ( Applied Proton fullscreen hack patch (d1290b6) )
+nvidia-hate.patch -- ( Hatin' on novideo )
+LAA-unix-staging.patch -- ( Applied large address aware override support )
+
+rdr2.patch -- ( Enable Proton's RDR2 fixes from Paul Gofman )
+proton-winevulkan.patch -- ( Using Proton winevulkan patches )
+msvcrt_nativebuiltin_mainline.patch -- ( Enforce msvcrt Dlls to native then builtin (from Proton) )
+josh-flat-theme.patch -- ( Add Josh's better-theme )
+proton-win10-default-staging.patch -- ( Enforce win10 as default wine version (staging) )
+
+Applied hotfix Return_nt_filename_and_resolve_DOS_drive_path.mypatch
+Applied hotfix ef6e33f.mypatch
+Applied hotfix 0001-proton-bcrypt_rdr2_fixes.mypatch
+Applied hotfix 0002-bcrypt-Add-support-for-calculating-secret-ecc-keys.mypatch
+Applied hotfix 0003-bcrypt-Add-support-for-OAEP-padded-asymmetric-key-de.mypatch
+Applied hotfix a608ef1.mypatch
+Applied your own patch 0001-powershell-add-wrapper-for-powershell-using-Powershe.mypatch
+Applied your own patch 1_amdags.mypatch
+Applied your own patch 1-QPC.mypatch
+Applied your own patch 1-rockstar_installer_fix_heap.mypatch
+Applied your own patch 21750.mypatch
+Applied your own patch 2-LFH.mypatch
+Applied your own patch 2_limit_res.mypatch
+Applied your own patch 3_atiadlxx.mypatch
+Applied your own patch Civ6Launcher_Workaround.mypatch
+Applied your own patch D3D10CoreRegisterLayers.mypatch
+Applied your own patch dotnetfx35_stuf.mypatch
+Applied your own patch dsound.mypatch
+Applied your own patch EnableMouseInPointer_support.mypatch
+Applied your own patch folder_picker_fix.mypatch
+Applied your own patch fonts.mypatch
+Applied your own patch fshack_amd_fsr.mypatch
+Applied your own patch GetQueuedCompletionStatus.mypatch
+Applied your own patch hotfix-uplay_render_fix.mypatch
+Applied your own patch legoisland_168726.mypatch
+Applied your own patch macromedia_director.mypatch
+Applied your own patch mfplat-godfall-hotfix.mypatch
+Applied your own patch mouse-focus-fixes.mypatch
+Applied your own patch ngx_dll_regkey.mypatch
+Applied your own patch ps0001-wininet-Improve-InternetGetConnectedStateExW-to-ha.mypatch
+Applied your own patch ps0010-netprofm-set-ret-NULL-if-no-more-connections.mypatch
+Applied your own patch ps0084-wineboot-Generate-ProductId-from-host-s-machine-id.mypatch
+Applied your own patch ps0232-winex11.drv-Add-a-taskbar-button-for-a-minimized-owned-window.mypatch
+Applied your own patch sims3_mshtml.mypatch
+Applied your own patch star-citizen-StorageDeviceSeekPenaltyProperty.mypatch
+Applied your own patch unity-alt-tab-fix.mypatch
+Applied your own patch winegstreamer_updates.mypatch
+Applied your own patch winemenubuilder.mypatch
+Applied your own patch winex11.drv_adjusting_gamma.mypatch
+Applied your own patch winex11.drv_fix_focus_delay.mypatch
+Applied your own patch winex11-fs-no_above_state.mypatch
+Applied your own patch winex11_limit_resources-nmode.mypatch
+
+wine-tkg-staging.patch -- ( Please don't report bugs about this wine build on winehq.org and use https://github.com/Frogging-Family/wine-tkg-git/issues instead. )
