@@ -1,0 +1,12 @@
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -5977,6 +5977,9 @@
+ HKCU,Software\Wine\DllOverrides,"vcruntime140",0x2,"native,builtin"
+ HKCU,Software\Wine\DllOverrides,"atiadlxx",,""
+ HKCU,Software\Wine\DllOverrides,"winemenubuilder.exe",0x2,""
++HKCU,Software\Microsoft\Windows\CurrentVersion\ThemeManager,"ColorName",0x2,"Blue"
++HKCU,Software\Microsoft\Windows\CurrentVersion\ThemeManager,"DllName",0x2,"C:\\windows\\Resources\\Themes\\light\\light.msstyles"
++HKCU,Software\Microsoft\Windows\CurrentVersion\ThemeManager,"ThemeActive",0x2,"1"
+ 
+ [ColorFiles]
+ srgb color space profile.icm,"@%11%\mscms.dll,-1"
