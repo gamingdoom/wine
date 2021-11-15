@@ -2384,6 +2384,14 @@ int WINAPI select( int count, fd_set *read_ptr, fd_set *write_ptr,
 
     TRACE( "read %p, write %p, except %p, timeout %p\n", read_ptr, write_ptr, except_ptr, timeout );
 
+    if ((read_ptr && IsBadWritePtr(read_ptr, sizeof(*read_ptr)))
+        || (write_ptr && IsBadWritePtr(write_ptr, sizeof(*write_ptr)))
+        || (except_ptr && IsBadWritePtr(except_ptr, sizeof(*except_ptr))))
+    {
+        SetLastError( WSAEFAULT );
+        return -1;
+    }
+
     FD_ZERO( &read );
     FD_ZERO( &write );
     FD_ZERO( &except );
@@ -2392,11 +2400,6 @@ int WINAPI select( int count, fd_set *read_ptr, fd_set *write_ptr,
     if (except_ptr) except = *except_ptr;
 
     if (!(sync_event = get_sync_event())) return -1;
-
-    if (timeout)
-        params->timeout = timeout->tv_sec * -10000000 + timeout->tv_usec * -10;
-    else
-        params->timeout = TIMEOUT_INFINITE;
 
     for (i = 0; i < read.fd_count; ++i)
     {
@@ -2427,6 +2430,18 @@ int WINAPI select( int count, fd_set *read_ptr, fd_set *write_ptr,
         SetLastError( WSAEINVAL );
         return -1;
     }
+
+    if (timeout)
+    {
+        if (IsBadReadPtr(timeout, sizeof(*timeout)))
+        {
+            SetLastError( WSAEFAULT );
+            return -1;
+        }
+        params->timeout = timeout->tv_sec * -10000000 + timeout->tv_usec * -10;
+    }
+    else
+        params->timeout = TIMEOUT_INFINITE;
 
     params_size = offsetof( struct afd_poll_params, sockets[params->count] );
 
