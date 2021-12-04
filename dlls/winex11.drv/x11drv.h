@@ -287,11 +287,9 @@ extern int *get_window_surface_mapping( int bpp, int *mapping ) DECLSPEC_HIDDEN;
 enum x11drv_escape_codes
 {
     X11DRV_SET_DRAWABLE,     /* set current drawable for a DC */
-    X11DRV_GET_DRAWABLE,     /* get current drawable for a DC */
     X11DRV_START_EXPOSURES,  /* start graphics exposures */
     X11DRV_END_EXPOSURES,    /* end graphics exposures */
-    X11DRV_FLUSH_GL_DRAWABLE, /* flush changes made to the gl drawable */
-    X11DRV_FLUSH_GDI_DISPLAY /* flush the gdi display */
+    X11DRV_PRESENT_DRAWABLE, /* present the drawable on screen */
 };
 
 struct x11drv_escape_set_drawable
@@ -302,18 +300,10 @@ struct x11drv_escape_set_drawable
     RECT                     dc_rect;      /* DC rectangle relative to drawable */
 };
 
-struct x11drv_escape_get_drawable
+struct x11drv_escape_present_drawable
 {
-    enum x11drv_escape_codes code;         /* escape code (X11DRV_GET_DRAWABLE) */
-    Drawable                 drawable;     /* X drawable */
-    Drawable                 gl_drawable;  /* GL drawable */
-    int                      pixel_format; /* internal GL pixel format */
-};
-
-struct x11drv_escape_flush_gl_drawable
-{
-    enum x11drv_escape_codes code;         /* escape code (X11DRV_FLUSH_GL_DRAWABLE) */
-    Drawable                 gl_drawable;  /* GL drawable */
+    enum x11drv_escape_codes code;         /* escape code (X11DRV_PRESENT_DRAWABLE) */
+    Drawable                 drawable;     /* GL / VK drawable */
     BOOL                     flush;        /* flush X11 before copying */
 };
 
@@ -334,7 +324,6 @@ struct x11drv_thread_data
     Display *display;
     XEvent  *current_event;        /* event currently being processed */
     HWND     grab_hwnd;            /* window that currently grabs the mouse */
-    HWND     active_window;        /* active window */
     HWND     last_focus;           /* last window that had focus */
     XIM      xim;                  /* input method */
     HWND     last_xic_hwnd;        /* last xic window */
@@ -404,6 +393,8 @@ extern BOOL show_systray DECLSPEC_HIDDEN;
 extern BOOL grab_pointer DECLSPEC_HIDDEN;
 extern BOOL grab_fullscreen DECLSPEC_HIDDEN;
 extern BOOL usexcomposite DECLSPEC_HIDDEN;
+extern BOOL use_xfixes DECLSPEC_HIDDEN;
+extern BOOL use_xpresent DECLSPEC_HIDDEN;
 extern BOOL managed_mode DECLSPEC_HIDDEN;
 extern BOOL decorated_mode DECLSPEC_HIDDEN;
 extern BOOL private_color_map DECLSPEC_HIDDEN;
@@ -411,9 +402,11 @@ extern int primary_monitor DECLSPEC_HIDDEN;
 extern int copy_default_colors DECLSPEC_HIDDEN;
 extern int alloc_system_colors DECLSPEC_HIDDEN;
 extern int xrender_error_base DECLSPEC_HIDDEN;
+extern int xfixes_event_base DECLSPEC_HIDDEN;
 extern HMODULE x11drv_module DECLSPEC_HIDDEN;
 extern char *process_name DECLSPEC_HIDDEN;
 extern Display *clipboard_display DECLSPEC_HIDDEN;
+extern HANDLE steam_overlay_event DECLSPEC_HIDDEN;
 
 /* atoms */
 
@@ -422,7 +415,6 @@ enum x11drv_atoms
     FIRST_XATOM = XA_LAST_PREDEFINED + 1,
     XATOM_CLIPBOARD = FIRST_XATOM,
     XATOM_COMPOUND_TEXT,
-    XATOM_EDID,
     XATOM_INCR,
     XATOM_MANAGER,
     XATOM_MULTIPLE,
@@ -444,7 +436,6 @@ enum x11drv_atoms
     XATOM_DndSelection,
     XATOM__ICC_PROFILE,
     XATOM__MOTIF_WM_HINTS,
-    XATOM__NET_ACTIVE_WINDOW,
     XATOM__NET_STARTUP_INFO_BEGIN,
     XATOM__NET_STARTUP_INFO,
     XATOM__NET_SUPPORTED,
@@ -597,13 +588,13 @@ extern struct x11drv_win_data *get_win_data( HWND hwnd ) DECLSPEC_HIDDEN;
 extern void release_win_data( struct x11drv_win_data *data ) DECLSPEC_HIDDEN;
 extern Window X11DRV_get_whole_window( HWND hwnd ) DECLSPEC_HIDDEN;
 extern XIC X11DRV_get_ic( HWND hwnd ) DECLSPEC_HIDDEN;
-extern Window get_dummy_parent(void) DECLSPEC_HIDDEN;
 
 extern void sync_gl_drawable( HWND hwnd, BOOL known_child ) DECLSPEC_HIDDEN;
 extern void set_gl_drawable_parent( HWND hwnd, HWND parent ) DECLSPEC_HIDDEN;
 extern void destroy_gl_drawable( HWND hwnd ) DECLSPEC_HIDDEN;
 extern void wine_vk_surface_destroy( HWND hwnd ) DECLSPEC_HIDDEN;
-extern void vulkan_thread_detach(void) DECLSPEC_HIDDEN;
+extern void resize_vk_surfaces( HWND hwnd, Window active, int mask, XWindowChanges *changes ) DECLSPEC_HIDDEN;
+extern void sync_vk_surface( HWND hwnd, BOOL known_child ) DECLSPEC_HIDDEN;
 
 extern void wait_for_withdrawn_state( HWND hwnd, BOOL set ) DECLSPEC_HIDDEN;
 extern Window init_clip_window(void) DECLSPEC_HIDDEN;
@@ -613,6 +604,7 @@ extern void update_net_wm_states( struct x11drv_win_data *data ) DECLSPEC_HIDDEN
 extern void make_window_embedded( struct x11drv_win_data *data ) DECLSPEC_HIDDEN;
 extern Window create_dummy_client_window(void) DECLSPEC_HIDDEN;
 extern Window create_client_window( HWND hwnd, const XVisualInfo *visual ) DECLSPEC_HIDDEN;
+extern void destroy_client_window( HWND hwnd, Window old_window, Window new_window ) DECLSPEC_HIDDEN;
 extern void set_window_visual( struct x11drv_win_data *data, const XVisualInfo *vis, BOOL use_alpha ) DECLSPEC_HIDDEN;
 extern void change_systray_owner( Display *display, Window systray_window ) DECLSPEC_HIDDEN;
 extern void update_systray_balloon_position(void) DECLSPEC_HIDDEN;
@@ -765,9 +757,6 @@ struct x11drv_monitor
     RECT rc_work;
     /* StateFlags in DISPLAY_DEVICE struct */
     DWORD state_flags;
-    /* Extended Device Identification Data */
-    unsigned long edid_len;
-    unsigned char *edid;
 };
 
 /* Required functions for display device registry initialization */
@@ -803,7 +792,7 @@ struct x11drv_display_device_handler
     void (*free_adapters)(struct x11drv_adapter *adapters);
 
     /* free_monitors will be called to free a monitor list from get_monitors */
-    void (*free_monitors)(struct x11drv_monitor *monitors, int count);
+    void (*free_monitors)(struct x11drv_monitor *monitors);
 
     /* register_event_handlers will be called to register event handlers.
      * This function pointer is optional and can be NULL when driver doesn't support it */

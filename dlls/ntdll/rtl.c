@@ -2154,7 +2154,7 @@ BOOLEAN WINAPI RtlIsProcessorFeaturePresent( UINT feature )
 void WINAPI RtlInitializeGenericTableAvl(PRTL_AVL_TABLE table, PRTL_AVL_COMPARE_ROUTINE compare,
                                          PRTL_AVL_ALLOCATE_ROUTINE allocate, PRTL_AVL_FREE_ROUTINE free, void *context)
 {
-    FIXME("%p %p %p %p %p: stub\n", table, compare, allocate, free, context);
+    FIXME("(%p, %p, %p, %p, %p): stub\n", table, compare, allocate, free, context);
 }
 
 /***********************************************************************
@@ -2162,7 +2162,43 @@ void WINAPI RtlInitializeGenericTableAvl(PRTL_AVL_TABLE table, PRTL_AVL_COMPARE_
  */
 void WINAPI RtlInsertElementGenericTableAvl(PRTL_AVL_TABLE table, void *buffer, ULONG size, BOOL *element)
 {
-    FIXME("%p %p %u %p: stub\n", table, buffer, size, element);
+    FIXME("(%p, %p, %u, %p): stub\n", table, buffer, size, element);
+}
+
+/***********************************************************************
+ *           RtlLookupElementGenericTableAvl  (NTDLL.@)
+ */
+PVOID WINAPI RtlLookupElementGenericTableAvl(PRTL_AVL_TABLE table, void *buffer)
+{
+    FIXME("(%p, %p): stub\n", table, buffer);
+    return NULL;
+}
+
+/***********************************************************************
+ *           RtlDeleteElementGenericTableAvl  (NTDLL.@)
+ */
+BOOLEAN WINAPI RtlDeleteElementGenericTableAvl(PRTL_AVL_TABLE table, void *buffer)
+{
+    FIXME("(%p, %p): stub\n", table, buffer);
+    return FALSE;
+}
+
+/***********************************************************************
+ *           RtlEnumerateGenericTableAvl  (NTDLL.@)
+ */
+PVOID WINAPI RtlEnumerateGenericTableAvl(PRTL_AVL_TABLE table, BOOL restart)
+{
+    FIXME("(%p, %s): stub\n", table, restart ? "TRUE" : "FALSE");
+    return NULL;
+}
+
+/***********************************************************************
+ *           RtlNumberGenericTableElementsAvl  (NTDLL.@)
+ */
+ULONG WINAPI RtlNumberGenericTableElementsAvl(PRTL_AVL_TABLE table)
+{
+    FIXME("(%p): stub\n", table);
+    return 0UL;
 }
 
 /*********************************************************************
