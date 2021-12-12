@@ -140,7 +140,6 @@
 @ stdcall -syscall NtAdjustPrivilegesToken(long long ptr long ptr ptr)
 @ stdcall -syscall NtAlertResumeThread(long ptr)
 @ stdcall -syscall NtAlertThread(long)
-@ stdcall -syscall NtAlertThreadByThreadId(ptr)
 @ stdcall -syscall NtAllocateLocallyUniqueId(ptr)
 # @ stub NtAllocateUserPhysicalPages
 @ stdcall -syscall NtAllocateUuids(ptr ptr ptr ptr)
@@ -425,7 +424,6 @@
 @ stdcall -syscall NtUnmapViewOfSection(long ptr)
 # @ stub NtVdmControl
 # @ stub NtW32Call
-@ stdcall -syscall NtWaitForAlertByThreadId(ptr ptr)
 @ stdcall -syscall NtWaitForDebugEvent(long long ptr ptr)
 @ stdcall -syscall NtWaitForKeyedEvent(long ptr long ptr)
 @ stdcall -syscall NtWaitForMultipleObjects(long ptr long long ptr)
@@ -588,7 +586,7 @@
 @ stdcall RtlDeleteCriticalSection(ptr)
 @ stdcall -arch=arm,arm64,x86_64 RtlDeleteGrowableFunctionTable(ptr)
 @ stub RtlDeleteElementGenericTable
-@ stub RtlDeleteElementGenericTableAvl
+@ stdcall RtlDeleteElementGenericTableAvl(ptr ptr)
 @ cdecl -arch=arm,arm64,x86_64 RtlDeleteFunctionTable(ptr)
 @ stub RtlDeleteNoSplay
 @ stub RtlDeleteOwnersRanges
@@ -631,7 +629,7 @@
 @ stdcall RtlEnterCriticalSection(ptr)
 @ stub RtlEnumProcessHeaps
 @ stub RtlEnumerateGenericTable
-# @ stub RtlEnumerateGenericTableAvl
+@ stdcall RtlEnumerateGenericTableAvl(ptr long)
 # @ stub RtlEnumerateGenericTableLikeADirectory
 @ stdcall RtlEnumerateGenericTableWithoutSplaying(ptr ptr)
 # @ stub RtlEnumerateGenericTableWithoutSplayingAvl
@@ -853,7 +851,7 @@
 # @ stub RtlLogStackBackTrace
 @ stdcall RtlLookupAtomInAtomTable(ptr wstr ptr)
 @ stub RtlLookupElementGenericTable
-# @ stub RtlLookupElementGenericTableAvl
+@ stdcall RtlLookupElementGenericTableAvl(ptr ptr)
 @ stdcall -arch=arm,arm64,x86_64 RtlLookupFunctionEntry(long ptr ptr)
 @ stdcall RtlMakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlMapGenericMask(ptr ptr)
@@ -874,7 +872,7 @@
 @ stdcall RtlNtStatusToDosError(long)
 @ stdcall RtlNtStatusToDosErrorNoTeb(long)
 @ stdcall RtlNumberGenericTableElements(ptr)
-# @ stub RtlNumberGenericTableElementsAvl
+@ stdcall RtlNumberGenericTableElementsAvl(ptr)
 @ stdcall RtlNumberOfClearBits(ptr)
 @ stdcall RtlNumberOfSetBits(ptr)
 @ stdcall RtlOemStringToUnicodeSize(ptr)
@@ -1163,7 +1161,6 @@
 @ stdcall -private -syscall ZwAdjustPrivilegesToken(long long ptr long ptr ptr) NtAdjustPrivilegesToken
 @ stdcall -private -syscall ZwAlertResumeThread(long ptr) NtAlertResumeThread
 @ stdcall -private -syscall ZwAlertThread(long) NtAlertThread
-@ stdcall -private -syscall ZwAlertThreadByThreadId(ptr) NtAlertThreadByThreadId
 @ stdcall -private -syscall ZwAllocateLocallyUniqueId(ptr) NtAllocateLocallyUniqueId
 # @ stub ZwAllocateUserPhysicalPages
 @ stdcall -private -syscall ZwAllocateUuids(ptr ptr ptr ptr) NtAllocateUuids
@@ -1446,7 +1443,6 @@
 @ stdcall -private -syscall ZwUnmapViewOfSection(long ptr) NtUnmapViewOfSection
 # @ stub ZwVdmControl
 # @ stub ZwW32Call
-@ stdcall -private -syscall ZwWaitForAlertByThreadId(ptr ptr) NtWaitForAlertByThreadId
 @ stdcall -private -syscall ZwWaitForDebugEvent(long long ptr ptr) NtWaitForDebugEvent
 @ stdcall -private -syscall ZwWaitForKeyedEvent(long ptr long ptr) NtWaitForKeyedEvent
 @ stdcall -private -syscall ZwWaitForMultipleObjects(long ptr long long ptr) NtWaitForMultipleObjects
@@ -1642,6 +1638,9 @@
 @ cdecl -norelay __wine_dbg_output(str)
 @ cdecl -norelay __wine_dbg_strdup(str)
 
+# Virtual memory
+@ cdecl -syscall __wine_needs_override_large_address_aware()
+
 # Version
 @ cdecl wine_get_version()
 @ cdecl wine_get_build_id()
@@ -1650,3 +1649,5 @@
 # Filesystem
 @ stdcall -syscall wine_nt_to_unix_file_name(ptr ptr ptr long)
 @ stdcall -syscall wine_unix_to_nt_file_name(str ptr ptr)
+
+@ cdecl IsTransgaming()

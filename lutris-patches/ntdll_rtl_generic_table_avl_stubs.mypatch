@@ -1,0 +1,96 @@
+diff -ru a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+--- a/dlls/ntdll/ntdll.spec	2021-12-04 03:26:06.350521000 +0300
++++ b/dlls/ntdll/ntdll.spec	2021-12-04 03:31:50.908391469 +0300
+@@ -586,7 +586,7 @@
+ @ stdcall RtlDeleteCriticalSection(ptr)
+ @ stdcall -arch=arm,arm64,x86_64 RtlDeleteGrowableFunctionTable(ptr)
+ @ stub RtlDeleteElementGenericTable
+-@ stub RtlDeleteElementGenericTableAvl
++@ stdcall RtlDeleteElementGenericTableAvl(ptr ptr)
+ @ cdecl -arch=arm,arm64,x86_64 RtlDeleteFunctionTable(ptr)
+ @ stub RtlDeleteNoSplay
+ @ stub RtlDeleteOwnersRanges
+@@ -629,7 +629,7 @@
+ @ stdcall RtlEnterCriticalSection(ptr)
+ @ stub RtlEnumProcessHeaps
+ @ stub RtlEnumerateGenericTable
+-# @ stub RtlEnumerateGenericTableAvl
++@ stdcall RtlEnumerateGenericTableAvl(ptr long)
+ # @ stub RtlEnumerateGenericTableLikeADirectory
+ @ stdcall RtlEnumerateGenericTableWithoutSplaying(ptr ptr)
+ # @ stub RtlEnumerateGenericTableWithoutSplayingAvl
+@@ -851,7 +851,7 @@
+ # @ stub RtlLogStackBackTrace
+ @ stdcall RtlLookupAtomInAtomTable(ptr wstr ptr)
+ @ stub RtlLookupElementGenericTable
+-# @ stub RtlLookupElementGenericTableAvl
++@ stdcall RtlLookupElementGenericTableAvl(ptr ptr)
+ @ stdcall -arch=arm,arm64,x86_64 RtlLookupFunctionEntry(long ptr ptr)
+ @ stdcall RtlMakeSelfRelativeSD(ptr ptr ptr)
+ @ stdcall RtlMapGenericMask(ptr ptr)
+@@ -872,7 +872,7 @@
+ @ stdcall RtlNtStatusToDosError(long)
+ @ stdcall RtlNtStatusToDosErrorNoTeb(long)
+ @ stdcall RtlNumberGenericTableElements(ptr)
+-# @ stub RtlNumberGenericTableElementsAvl
++@ stdcall RtlNumberGenericTableElementsAvl(ptr)
+ @ stdcall RtlNumberOfClearBits(ptr)
+ @ stdcall RtlNumberOfSetBits(ptr)
+ @ stdcall RtlOemStringToUnicodeSize(ptr)
+diff -ru a/dlls/ntdll/rtl.c b/dlls/ntdll/rtl.c
+--- a/dlls/ntdll/rtl.c	2021-12-04 03:25:44.214129000 +0300
++++ b/dlls/ntdll/rtl.c	2021-12-04 03:36:01.820481183 +0300
+@@ -2154,7 +2154,7 @@
+ void WINAPI RtlInitializeGenericTableAvl(PRTL_AVL_TABLE table, PRTL_AVL_COMPARE_ROUTINE compare,
+                                          PRTL_AVL_ALLOCATE_ROUTINE allocate, PRTL_AVL_FREE_ROUTINE free, void *context)
+ {
+-    FIXME("%p %p %p %p %p: stub\n", table, compare, allocate, free, context);
++    FIXME("(%p, %p, %p, %p, %p): stub\n", table, compare, allocate, free, context);
+ }
+ 
+ /***********************************************************************
+@@ -2162,7 +2162,43 @@
+  */
+ void WINAPI RtlInsertElementGenericTableAvl(PRTL_AVL_TABLE table, void *buffer, ULONG size, BOOL *element)
+ {
+-    FIXME("%p %p %u %p: stub\n", table, buffer, size, element);
++    FIXME("(%p, %p, %u, %p): stub\n", table, buffer, size, element);
++}
++
++/***********************************************************************
++ *           RtlLookupElementGenericTableAvl  (NTDLL.@)
++ */
++PVOID WINAPI RtlLookupElementGenericTableAvl(PRTL_AVL_TABLE table, void *buffer)
++{
++    FIXME("(%p, %p): stub\n", table, buffer);
++    return NULL;
++}
++
++/***********************************************************************
++ *           RtlDeleteElementGenericTableAvl  (NTDLL.@)
++ */
++BOOLEAN WINAPI RtlDeleteElementGenericTableAvl(PRTL_AVL_TABLE table, void *buffer)
++{
++    FIXME("(%p, %p): stub\n", table, buffer);
++    return FALSE;
++}
++
++/***********************************************************************
++ *           RtlEnumerateGenericTableAvl  (NTDLL.@)
++ */
++PVOID WINAPI RtlEnumerateGenericTableAvl(PRTL_AVL_TABLE table, BOOL restart)
++{
++    FIXME("(%p, %s): stub\n", table, restart ? "TRUE" : "FALSE");
++    return NULL;
++}
++
++/***********************************************************************
++ *           RtlNumberGenericTableElementsAvl  (NTDLL.@)
++ */
++ULONG WINAPI RtlNumberGenericTableElementsAvl(PRTL_AVL_TABLE table)
++{
++    FIXME("(%p): stub\n", table);
++    return 0UL;
+ }
+ 
+ /*********************************************************************
