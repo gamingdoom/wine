@@ -54,6 +54,7 @@ struct ntdll_thread_data
     void              *cpu_data[16];  /* reserved for CPU-specific data */
     void              *kernel_stack;  /* stack for thread startup and kernel syscalls */
     int                esync_apc_fd;  /* fd to wait on for user APCs */
+    int               *fsync_apc_futex;
     int                request_fd;    /* fd for sending server requests */
     int                reply_fd;      /* fd for receiving server replies */
     int                wait_fd[2];    /* fd for sleeping server requests */
@@ -62,6 +63,7 @@ struct ntdll_thread_data
     PRTL_THREAD_START_ROUTINE start;  /* thread entry point */
     void              *param;         /* thread entry point parameter */
     void              *jmp_buf;       /* setjmp buffer for exception handling */
+    void              *heap;          /* thread local heap data */
 };
 
 C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
@@ -136,6 +138,7 @@ extern BOOL process_exiting DECLSPEC_HIDDEN;
 extern HANDLE keyed_event DECLSPEC_HIDDEN;
 extern timeout_t server_start_time DECLSPEC_HIDDEN;
 extern sigset_t server_block_set DECLSPEC_HIDDEN;
+extern void *hypervisor_shared_data DECLSPEC_HIDDEN;
 extern struct _KUSER_SHARED_DATA *user_shared_data DECLSPEC_HIDDEN;
 extern SYSTEM_CPU_INFORMATION cpu_info DECLSPEC_HIDDEN;
 #ifndef _WIN64
@@ -144,6 +147,8 @@ extern BOOL is_wow64 DECLSPEC_HIDDEN;
 #ifdef __i386__
 extern struct ldt_copy __wine_ldt_copy DECLSPEC_HIDDEN;
 #endif
+
+extern BOOL ac_odyssey DECLSPEC_HIDDEN;
 
 extern void init_environment( int argc, char *argv[], char *envp[] ) DECLSPEC_HIDDEN;
 extern void init_startup_info(void) DECLSPEC_HIDDEN;
@@ -208,6 +213,7 @@ extern NTSTATUS virtual_clear_tls_index( ULONG index ) DECLSPEC_HIDDEN;
 extern NTSTATUS virtual_alloc_thread_stack( INITIAL_TEB *stack, ULONG_PTR zero_bits, SIZE_T reserve_size,
                                             SIZE_T commit_size, SIZE_T extra_size ) DECLSPEC_HIDDEN;
 extern void virtual_map_user_shared_data(void) DECLSPEC_HIDDEN;
+extern void virtual_map_hypervisor_shared_data(void) DECLSPEC_HIDDEN;
 extern NTSTATUS virtual_handle_fault( void *addr, DWORD err, void *stack ) DECLSPEC_HIDDEN;
 extern unsigned int virtual_locked_server_call( void *req_ptr ) DECLSPEC_HIDDEN;
 extern ssize_t virtual_locked_read( int fd, void *addr, size_t size ) DECLSPEC_HIDDEN;
@@ -225,7 +231,9 @@ extern void virtual_fill_image_information( const pe_image_info_t *pe_info,
                                             SECTION_IMAGE_INFORMATION *info ) DECLSPEC_HIDDEN;
 extern void release_builtin_module( void *module ) DECLSPEC_HIDDEN;
 extern void *get_builtin_so_handle( void *module ) DECLSPEC_HIDDEN;
-extern NTSTATUS load_builtin_unixlib( void *module, const char *name ) DECLSPEC_HIDDEN;
+extern NTSTATUS get_builtin_unix_info( void *module, const char **name, void **handle, void **entry ) DECLSPEC_HIDDEN;
+extern NTSTATUS set_builtin_unix_handle( void *module, const char *name, void *handle ) DECLSPEC_HIDDEN;
+extern NTSTATUS set_builtin_unix_entry( void *module, void *entry ) DECLSPEC_HIDDEN;
 
 extern NTSTATUS get_thread_ldt_entry( HANDLE handle, void *data, ULONG len, ULONG *ret_len ) DECLSPEC_HIDDEN;
 extern void *get_native_context( CONTEXT *context ) DECLSPEC_HIDDEN;
@@ -447,5 +455,7 @@ static inline void init_unicode_string( UNICODE_STRING *str, const WCHAR *data )
     str->MaximumLength = str->Length + sizeof(WCHAR);
     str->Buffer = (WCHAR *)data;
 }
+
+BOOL CDECL __wine_needs_override_large_address_aware(void);
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */
