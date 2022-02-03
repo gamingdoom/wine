@@ -86,6 +86,7 @@
 #include "wine/debug.h"
 #include "unix_private.h"
 #include "esync.h"
+#include "fsync.h"
 #include "ddk/wdm.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(server);
@@ -258,6 +259,7 @@ static void read_reply_data( void *buffer, size_t size )
         if (!ret) break;
         if (errno == EINTR) continue;
         if (errno == EPIPE) break;
+        if (errno == EFAULT && virtual_check_buffer_for_write( buffer, size )) continue;
         server_protocol_perror("read");
     }
     /* the server closed the connection; time to die... */
@@ -292,6 +294,14 @@ unsigned int server_call_unlocked( void *req_ptr )
 }
 
 
+static inline BOOL check_buffer_write_access( void *ptr, SIZE_T size )
+{
+    if (size > 16384 && virtual_check_buffer_write_access( ptr, size ))
+        return TRUE;
+    return virtual_check_buffer_for_write( ptr, size );
+}
+
+
 /***********************************************************************
  *           wine_server_call
  *
@@ -305,7 +315,7 @@ unsigned int CDECL wine_server_call( void *req_ptr )
 
     /* trigger write watches, otherwise read() might return EFAULT */
     if (req->u.req.request_header.reply_size &&
-        !virtual_check_buffer_for_write( req->reply_data, req->u.req.request_header.reply_size ))
+        !check_buffer_write_access( req->reply_data, req->u.req.request_header.reply_size ))
     {
         return STATUS_ACCESS_VIOLATION;
     }
@@ -1608,8 +1618,8 @@ void server_init_process_done(void)
 #ifdef __APPLE__
     send_server_task_port();
 #endif
-    if (main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)
-        virtual_set_large_address_space();
+    if (main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE
+            || __wine_needs_override_large_address_aware()) virtual_set_large_address_space();
 
     /* Install signal handlers; this cannot be done earlier, since we cannot
      * send exceptions to the debugger before the create process event that
@@ -1762,6 +1772,9 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
     /* always remove the cached fd; if the server request fails we'll just
      * retrieve it again */
     fd = remove_fd_from_cache( handle );
+
+    if (do_fsync())
+        fsync_close( handle );
 
     if (do_esync())
         esync_close( handle );

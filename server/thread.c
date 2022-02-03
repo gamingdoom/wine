@@ -51,6 +51,7 @@
 #include "user.h"
 #include "security.h"
 #include "esync.h"
+#include "fsync.h"
 
 
 /* thread queues */
@@ -59,6 +60,7 @@ struct thread_wait
 {
     struct thread_wait     *next;       /* next wait structure for this thread */
     struct thread          *thread;     /* owner thread */
+    int                     capacity;   /* size of objects */
     int                     count;      /* count of objects */
     int                     flags;
     int                     abandoned;
@@ -98,6 +100,7 @@ static const struct object_ops thread_apc_ops =
     remove_queue,               /* remove_queue */
     thread_apc_signaled,        /* signaled */
     NULL,                       /* get_esync_fd */
+    NULL,                       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
@@ -144,6 +147,7 @@ static const struct object_ops context_ops =
     remove_queue,               /* remove_queue */
     context_signaled,           /* signaled */
     NULL,                       /* get_esync_fd */
+    NULL,                       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
@@ -181,6 +185,7 @@ struct type_descr thread_type =
 static void dump_thread( struct object *obj, int verbose );
 static int thread_signaled( struct object *obj, struct wait_queue_entry *entry );
 static int thread_get_esync_fd( struct object *obj, enum esync_type *type );
+static unsigned int thread_get_fsync_idx( struct object *obj, enum fsync_type *type );
 static unsigned int thread_map_access( struct object *obj, unsigned int access );
 static void thread_poll_event( struct fd *fd, int event );
 static struct list *thread_get_kernel_obj_list( struct object *obj );
@@ -195,6 +200,7 @@ static const struct object_ops thread_ops =
     remove_queue,               /* remove_queue */
     thread_signaled,            /* signaled */
     thread_get_esync_fd,        /* get_esync_fd */
+    thread_get_fsync_idx,       /* get_fsync_idx */
     no_satisfied,               /* satisfied */
     no_signal,                  /* signal */
     no_get_fd,                  /* get_fd */
@@ -236,12 +242,16 @@ static inline void init_thread_structure( struct thread *thread )
     thread->entry_point     = 0;
     thread->esync_fd        = -1;
     thread->esync_apc_fd    = -1;
+    thread->fsync_idx       = 0;
     thread->system_regs     = 0;
     thread->queue           = NULL;
     thread->wait            = NULL;
     thread->error           = 0;
     thread->req_data        = NULL;
+    thread->req_data_size   = 0;
     thread->req_toread      = 0;
+    thread->rep_data        = NULL;
+    thread->rep_data_size   = 0;
     thread->reply_data      = NULL;
     thread->reply_towrite   = 0;
     thread->request_fd      = NULL;
@@ -384,6 +394,12 @@ struct thread *create_thread( int fd, struct process *process, const struct secu
         }
     }
 
+    if (do_fsync())
+    {
+        thread->fsync_idx = fsync_alloc_shm( 0, 0 );
+        thread->fsync_apc_idx = fsync_alloc_shm( 0, 0 );
+    }
+
     if (do_esync())
     {
         thread->esync_fd = esync_create_fd( 0, 0 );
@@ -430,7 +446,8 @@ static void cleanup_thread( struct thread *thread )
     clear_apc_queue( &thread->system_apc );
     clear_apc_queue( &thread->user_apc );
     free( thread->req_data );
-    free( thread->reply_data );
+    free( thread->rep_data );
+    if (thread->reply_data != thread->rep_data) free( thread->reply_data );
     if (thread->request_fd) release_object( thread->request_fd );
     if (thread->reply_fd) release_object( thread->reply_fd );
     if (thread->wait_fd) release_object( thread->wait_fd );
@@ -448,6 +465,7 @@ static void cleanup_thread( struct thread *thread )
     }
     free( thread->desc );
     thread->req_data = NULL;
+    thread->rep_data = NULL;
     thread->reply_data = NULL;
     thread->request_fd = NULL;
     thread->reply_fd = NULL;
@@ -495,6 +513,13 @@ static int thread_get_esync_fd( struct object *obj, enum esync_type *type )
     struct thread *thread = (struct thread *)obj;
     *type = ESYNC_MANUAL_SERVER;
     return thread->esync_fd;
+}
+
+static unsigned int thread_get_fsync_idx( struct object *obj, enum fsync_type *type )
+{
+    struct thread *thread = (struct thread *)obj;
+    *type = FSYNC_MANUAL_SERVER;
+    return thread->fsync_idx;
 }
 
 static unsigned int thread_map_access( struct object *obj, unsigned int access )
@@ -548,6 +573,7 @@ static struct thread_apc *create_apc( struct object *owner, const apc_call_t *ca
         apc->result.type = APC_NONE;
         if (owner) grab_object( owner );
     }
+
     return apc;
 }
 
@@ -770,6 +796,47 @@ void set_wait_status( struct wait_queue_entry *entry, int status )
     entry->wait->status = status;
 }
 
+static struct thread_wait *wait_free_pool;
+
+static struct thread_wait *thread_wait_alloc(unsigned int count)
+{
+    struct thread_wait *wait, *pool;
+    unsigned int i;
+
+    if (count > 2)
+        return mem_alloc( FIELD_OFFSET(struct thread_wait, queues[count]) );
+
+    if (!(wait = wait_free_pool))
+    {
+        unsigned int size = FIELD_OFFSET( struct thread_wait, queues[2] );
+        if (!(pool = calloc( 64, size )))
+            return NULL;
+
+        for (i = 0; i < 64; ++i)
+        {
+            wait = (struct thread_wait *)((char*)pool + size * i);
+            wait->next = wait_free_pool;
+            wait_free_pool = wait;
+        }
+    }
+
+    wait_free_pool = wait->next;
+    assert(wait);
+    return wait;
+}
+
+static void thread_wait_free(struct thread_wait *wait)
+{
+    if (wait->capacity > 2)
+    {
+        free(wait);
+        return;
+    }
+
+    wait->next = wait_free_pool;
+    wait_free_pool = wait;
+}
+
 /* finish waiting */
 static unsigned int end_wait( struct thread *thread, unsigned int status )
 {
@@ -799,7 +866,7 @@ static unsigned int end_wait( struct thread *thread, unsigned int status )
     for (i = 0, entry = wait->queues; i < wait->count; i++, entry++)
         entry->obj->ops->remove_queue( entry->obj, entry );
     if (wait->user) remove_timeout_user( wait->user );
-    free( wait );
+    thread_wait_free( wait );
     return status;
 }
 
@@ -811,9 +878,10 @@ static int wait_on( const select_op_t *select_op, unsigned int count, struct obj
     struct wait_queue_entry *entry;
     unsigned int i;
 
-    if (!(wait = mem_alloc( FIELD_OFFSET(struct thread_wait, queues[count]) ))) return 0;
+    if (!(wait = thread_wait_alloc( count ))) { assert(0); return 0; }
     wait->next    = current->wait;
     wait->thread  = current;
+    wait->capacity = count;
     wait->count   = count;
     wait->flags   = flags;
     wait->select  = select_op->op;
@@ -1090,6 +1158,9 @@ void wake_up( struct object *obj, int max )
     struct list *ptr;
     int ret;
 
+    if (do_fsync())
+        fsync_wake_up( obj );
+
     if (do_esync())
         esync_wake_up( obj );
 
@@ -1180,6 +1251,9 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
     {
         wake_thread( thread );
 
+        if (do_fsync() && queue == &thread->user_apc)
+            fsync_wake_futex( thread->fsync_apc_idx );
+
         if (do_esync() && queue == &thread->user_apc)
             esync_wake_fd( thread->esync_apc_fd );
     }
@@ -1229,6 +1303,9 @@ static struct thread_apc *thread_dequeue_apc( struct thread *thread, int system 
         apc = LIST_ENTRY( ptr, struct thread_apc, entry );
         list_remove( ptr );
     }
+
+    if (do_fsync() && list_empty( &thread->system_apc ) && list_empty( &thread->user_apc ))
+        fsync_clear_futex( thread->fsync_apc_idx );
 
     if (do_esync() && list_empty( &thread->system_apc ) && list_empty( &thread->user_apc ))
         esync_clear( thread->esync_apc_fd );
@@ -1348,6 +1425,8 @@ void kill_thread( struct thread *thread, int violent_death )
     }
     kill_console_processes( thread, 0 );
     abandon_mutexes( thread );
+    if (do_fsync())
+        fsync_abandon_mutexes( thread );
     if (do_esync())
         esync_abandon_mutexes( thread );
     if (violent_death)

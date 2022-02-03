@@ -56,6 +56,8 @@ struct thread
     struct list            mutex_list;    /* list of currently owned mutexes */
     int                    esync_fd;      /* esync file descriptor (signalled on exit) */
     int                    esync_apc_fd;  /* esync apc fd (signalled when APCs are present) */
+    unsigned int           fsync_idx;
+    unsigned int           fsync_apc_idx;
     unsigned int           system_regs;   /* which system regs have been set */
     struct msg_queue      *queue;         /* message queue */
     struct thread_wait    *wait;          /* current wait condition if sleeping */
@@ -65,7 +67,10 @@ struct thread
     unsigned int           error;         /* current error code */
     union generic_request  req;           /* current request */
     void                  *req_data;      /* variable-size data for request */
+    unsigned int           req_data_size;
     unsigned int           req_toread;    /* amount of data still to read in request */
+    void                  *rep_data;      /* variable-size data for reply */
+    unsigned int           rep_data_size; /* size of reply data */
     void                  *reply_data;    /* variable-size data for reply */
     unsigned int           reply_size;    /* size of reply data */
     unsigned int           reply_towrite; /* amount of data still to write in reply */

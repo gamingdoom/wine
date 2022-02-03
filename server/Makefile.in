@@ -15,6 +15,7 @@ C_SRCS = \
 	event.c \
 	fd.c \
 	file.c \
+	fsync.c \
 	handle.c \
 	hook.c \
 	mach.c \
@@ -51,6 +52,7 @@ MANPAGES = \
 	wineserver.fr.UTF-8.man.in \
 	wineserver.man.in
 
-EXTRALIBS = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS)
+EXTRALIBS = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS) -flto=auto -flto-partition=one -fdevirtualize-at-ltrans
+EXTRADEFS = -flto=auto -flto-partition=one -fdevirtualize-at-ltrans
 
 unicode_EXTRADEFS = -DNLSDIR="\"${nlsdir}\"" -DBIN_TO_NLSDIR=\"`${MAKEDEP} -R ${bindir} ${nlsdir}`\"

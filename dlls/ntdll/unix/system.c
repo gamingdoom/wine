@@ -2787,8 +2787,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
 
     case SystemHandleInformation:  /* 16 */
     {
-        struct handle_info *handle_info;
-        DWORD i, num_handles;
+        DWORD num_handles;
 
         if (size < sizeof(SYSTEM_HANDLE_INFORMATION))
         {
@@ -2803,26 +2802,16 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
         }
 
         num_handles = (size - FIELD_OFFSET( SYSTEM_HANDLE_INFORMATION, Handle )) / sizeof(SYSTEM_HANDLE_ENTRY);
-        if (!(handle_info = malloc( sizeof(*handle_info) * num_handles ))) return STATUS_NO_MEMORY;
 
         SERVER_START_REQ( get_system_handles )
         {
-            wine_server_set_reply( req, handle_info, sizeof(*handle_info) * num_handles );
+            SYSTEM_HANDLE_INFORMATION *shi = info;
+            req->ex = 0;
+            wine_server_set_reply( req, shi->Handle, sizeof(shi->Handle[0]) * num_handles );
             if (!(ret = wine_server_call( req )))
             {
-                SYSTEM_HANDLE_INFORMATION *shi = info;
-                shi->Count = wine_server_reply_size( req ) / sizeof(*handle_info);
+                shi->Count = wine_server_reply_size( req ) / sizeof(shi->Handle[0]);
                 len = FIELD_OFFSET( SYSTEM_HANDLE_INFORMATION, Handle[shi->Count] );
-                for (i = 0; i < shi->Count; i++)
-                {
-                    memset( &shi->Handle[i], 0, sizeof(shi->Handle[i]) );
-                    shi->Handle[i].OwnerPid     = handle_info[i].owner;
-                    shi->Handle[i].HandleValue  = handle_info[i].handle;
-                    shi->Handle[i].AccessMask   = handle_info[i].access;
-                    shi->Handle[i].HandleFlags  = handle_info[i].attributes;
-                    shi->Handle[i].ObjectType   = handle_info[i].type;
-                    /* FIXME: Fill out ObjectPointer */
-                }
             }
             else if (ret == STATUS_BUFFER_TOO_SMALL)
             {
@@ -2831,8 +2820,6 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
             }
         }
         SERVER_END_REQ;
-
-        free( handle_info );
         break;
     }
 
@@ -3005,8 +2992,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
 
     case SystemExtendedHandleInformation:  /* 64 */
     {
-        struct handle_info *handle_info;
-        DWORD i, num_handles;
+        DWORD num_handles;
 
         if (size < sizeof(SYSTEM_HANDLE_INFORMATION_EX))
         {
@@ -3022,26 +3008,16 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
 
         num_handles = (size - FIELD_OFFSET( SYSTEM_HANDLE_INFORMATION_EX, Handles ))
                       / sizeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX);
-        if (!(handle_info = malloc( sizeof(*handle_info) * num_handles ))) return STATUS_NO_MEMORY;
 
         SERVER_START_REQ( get_system_handles )
         {
-            wine_server_set_reply( req, handle_info, sizeof(*handle_info) * num_handles );
+            SYSTEM_HANDLE_INFORMATION_EX *shi = info;
+            req->ex = 1;
+            wine_server_set_reply( req, shi->Handles, sizeof(shi->Handles[0]) * num_handles );
             if (!(ret = wine_server_call( req )))
             {
-                SYSTEM_HANDLE_INFORMATION_EX *shi = info;
-                shi->NumberOfHandles = wine_server_reply_size( req ) / sizeof(*handle_info);
+                shi->NumberOfHandles = wine_server_reply_size( req ) / sizeof(shi->Handles[0]);
                 len = FIELD_OFFSET( SYSTEM_HANDLE_INFORMATION_EX, Handles[shi->NumberOfHandles] );
-                for (i = 0; i < shi->NumberOfHandles; i++)
-                {
-                    memset( &shi->Handles[i], 0, sizeof(shi->Handles[i]) );
-                    shi->Handles[i].UniqueProcessId  = handle_info[i].owner;
-                    shi->Handles[i].HandleValue      = handle_info[i].handle;
-                    shi->Handles[i].GrantedAccess    = handle_info[i].access;
-                    shi->Handles[i].HandleAttributes = handle_info[i].attributes;
-                    shi->Handles[i].ObjectTypeIndex  = handle_info[i].type;
-                    /* FIXME: Fill out Object */
-                }
             }
             else if (ret == STATUS_BUFFER_TOO_SMALL)
             {
@@ -3050,8 +3026,6 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
             }
         }
         SERVER_END_REQ;
-
-        free( handle_info );
         break;
     }
 
@@ -3202,6 +3176,18 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
         len = strlen(version) + strlen(wine_build) + strlen(buf.sysname) + strlen(buf.release) + 4;
         snprintf( info, size, "%s%c%s%c%s%c%s", version, 0, wine_build, 0, buf.sysname, 0, buf.release );
         if (size < len) ret = STATUS_INFO_LENGTH_MISMATCH;
+        break;
+    }
+
+    case SystemHypervisorSharedPageInformation:
+    {
+        len = sizeof(void *);
+        if (size >= len)
+        {
+            if (!info) ret = STATUS_ACCESS_VIOLATION;
+            else *(void **)info = hypervisor_shared_data;
+        }
+        else ret = STATUS_INFO_LENGTH_MISMATCH;
         break;
     }
 

@@ -619,6 +619,21 @@ static CRITICAL_SECTION_DEBUG critsect_debug =
 };
 static CRITICAL_SECTION locale_section = { &critsect_debug, -1, 0, 0, 0, 0 };
 
+static struct
+{
+    WCHAR                  locale[LOCALE_NAME_MAX_LENGTH]; /* The locale name */
+    const struct sortguid *guid;                           /* The cached associated GUID */
+} sortguid_cache;
+
+static CRITICAL_SECTION sortguid_cache_section;
+static CRITICAL_SECTION_DEBUG sortguid_cache_section_debug =
+{
+    0, 0, &sortguid_cache_section,
+    { &sortguid_cache_section_debug.ProcessLocksList, &sortguid_cache_section_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": sortguid_cache_section") }
+};
+static CRITICAL_SECTION sortguid_cache_section = { &sortguid_cache_section_debug, -1, 0, 0, 0, 0 };
+
 
 static void init_sortkeys( DWORD *ptr )
 {
@@ -656,7 +671,7 @@ static const struct sortguid *find_sortguid( const GUID *guid )
 }
 
 
-static const struct sortguid *get_language_sort( const WCHAR *locale )
+static const struct sortguid *get_language_sort_uncached( const WCHAR *locale )
 {
     WCHAR *p, *end, buffer[LOCALE_NAME_MAX_LENGTH], guidstr[39];
     const struct sortguid *ret;
@@ -695,6 +710,31 @@ static const struct sortguid *get_language_sort( const WCHAR *locale )
     ret = find_sortguid( &default_sort_guid );
 done:
     RegCloseKey( key );
+    return ret;
+}
+
+
+static const struct sortguid *get_language_sort( const WCHAR *locale )
+{
+    const struct sortguid *ret = NULL;
+
+    if (!locale) return get_language_sort_uncached( locale );
+
+    RtlEnterCriticalSection( &sortguid_cache_section );
+
+    if (sortguid_cache.guid && !wcsncmp( sortguid_cache.locale, locale, LOCALE_NAME_MAX_LENGTH ))
+    {
+        ret = sortguid_cache.guid;
+        goto done;
+    }
+
+    ret = get_language_sort_uncached( locale );
+
+    lstrcpynW( sortguid_cache.locale, locale, LOCALE_NAME_MAX_LENGTH );
+    sortguid_cache.guid = ret;
+
+done:
+    RtlLeaveCriticalSection( &sortguid_cache_section );
     return ret;
 }
 

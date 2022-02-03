@@ -98,7 +98,9 @@ struct builtin_module
     unsigned int refcount;
     void        *handle;
     void        *module;
+    char        *unix_name;
     void        *unix_handle;
+    void        *unix_entry;
 };
 
 static struct list builtin_modules = LIST_INIT( builtin_modules );
@@ -110,6 +112,8 @@ struct file_view
     size_t        size;          /* size in bytes */
     unsigned int  protect;       /* protection for all pages at allocation time and SEC_* flags */
 };
+
+#define SYMBOLIC_LINK_QUERY 0x0001
 
 /* per-page protection flags */
 #define VPROT_READ       0x01
@@ -175,6 +179,7 @@ static void *user_space_limit    = (void *)0x7fff0000;
 static void *working_set_limit   = (void *)0x7fff0000;
 #endif
 
+void *hypervisor_shared_data = (void *)0x7ffd0000;
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
 
 /* TEB allocation blocks */
@@ -604,7 +609,9 @@ static void add_builtin_module( void *module, void *handle )
     builtin->handle      = handle;
     builtin->module      = module;
     builtin->refcount    = 1;
+    builtin->unix_name   = NULL;
     builtin->unix_handle = NULL;
+    builtin->unix_entry  = NULL;
     list_add_tail( &builtin_modules, &builtin->entry );
 }
 
@@ -624,6 +631,7 @@ void release_builtin_module( void *module )
             list_remove( &builtin->entry );
             if (builtin->handle) dlclose( builtin->handle );
             if (builtin->unix_handle) dlclose( builtin->unix_handle );
+            free( builtin->unix_name );
             free( builtin );
         }
         break;
@@ -680,22 +688,45 @@ static NTSTATUS get_builtin_unix_funcs( void *module, BOOL wow, void **funcs )
 
 
 /***********************************************************************
- *           load_builtin_unixlib
+ *           get_builtin_unix_info
  */
-NTSTATUS load_builtin_unixlib( void *module, const char *name )
+NTSTATUS get_builtin_unix_info( void *module, const char **name, void **handle, void **entry )
 {
-    void *handle;
     sigset_t sigset;
     NTSTATUS status = STATUS_DLL_NOT_FOUND;
     struct builtin_module *builtin;
 
-    if (!(handle = dlopen( name, RTLD_NOW ))) return status;
+    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+    LIST_FOR_EACH_ENTRY( builtin, &builtin_modules, struct builtin_module, entry )
+    {
+        if (builtin->module != module) continue;
+        *name   = builtin->unix_name;
+        *handle = builtin->unix_handle;
+        *entry  = builtin->unix_entry;
+        status = STATUS_SUCCESS;
+        break;
+    }
+    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+    return status;
+}
+
+
+/***********************************************************************
+ *           set_builtin_unix_handle
+ */
+NTSTATUS set_builtin_unix_handle( void *module, const char *name, void *handle )
+{
+    sigset_t sigset;
+    NTSTATUS status = STATUS_DLL_NOT_FOUND;
+    struct builtin_module *builtin;
+
     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
     LIST_FOR_EACH_ENTRY( builtin, &builtin_modules, struct builtin_module, entry )
     {
         if (builtin->module != module) continue;
         if (!builtin->unix_handle)
         {
+            builtin->unix_name = strdup( name );
             builtin->unix_handle = handle;
             status = STATUS_SUCCESS;
         }
@@ -703,7 +734,31 @@ NTSTATUS load_builtin_unixlib( void *module, const char *name )
         break;
     }
     server_leave_uninterrupted_section( &virtual_mutex, &sigset );
-    if (status) dlclose( handle );
+    return status;
+}
+
+
+/***********************************************************************
+ *           set_builtin_unix_entry
+ */
+NTSTATUS set_builtin_unix_entry( void *module, void *entry )
+{
+    sigset_t sigset;
+    NTSTATUS status = STATUS_DLL_NOT_FOUND;
+    struct builtin_module *builtin;
+
+    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+    LIST_FOR_EACH_ENTRY( builtin, &builtin_modules, struct builtin_module, entry )
+    {
+        if (builtin->module != module) continue;
+        if (builtin->unix_handle)
+        {
+            builtin->unix_entry = entry;
+            status = STATUS_SUCCESS;
+        }
+        break;
+    }
+    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
     return status;
 }
 
@@ -3036,6 +3091,7 @@ static TEB *init_teb( void *ptr, BOOL is_wow )
     teb->StaticUnicodeString.MaximumLength = sizeof(teb->StaticUnicodeBuffer);
     thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
     thread_data->esync_apc_fd = -1;
+    thread_data->fsync_apc_futex = NULL;
     thread_data->request_fd = -1;
     thread_data->reply_fd   = -1;
     thread_data->wait_fd[0] = -1;
@@ -3058,6 +3114,14 @@ TEB *virtual_alloc_first_teb(void)
 
     /* reserve space for shared user data */
     status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&user_shared_data, 0, &data_size,
+                                      MEM_RESERVE | MEM_COMMIT, PAGE_READONLY );
+    if (status)
+    {
+        ERR( "wine: failed to map the shared user data: %08x\n", status );
+        exit(1);
+    }
+
+    status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&hypervisor_shared_data, 0, &data_size,
                                       MEM_RESERVE | MEM_COMMIT, PAGE_READONLY );
     if (status)
     {
@@ -3343,6 +3407,35 @@ static BOOL is_inside_thread_stack( void *ptr, struct thread_stack_info *stack )
 
 
 /***********************************************************************
+ *           virtual_map_hypervisor_shared_data
+ */
+void virtual_map_hypervisor_shared_data(void)
+{
+    static const WCHAR nameW[] = {'\\','K','e','r','n','e','l','O','b','j','e','c','t','s',
+                                  '\\','_','_','w','i','n','e','_','h','y','p','e','r','v','i','s','o','r','_','s','h','a','r','e','d','_','d','a','t','a',0};
+    UNICODE_STRING name_str = { sizeof(nameW) - sizeof(WCHAR), sizeof(nameW), (WCHAR *)nameW };
+    OBJECT_ATTRIBUTES attr = { sizeof(attr), 0, &name_str };
+    NTSTATUS status;
+    HANDLE section;
+    int res, fd, needs_close;
+
+    if ((status = NtOpenSection( &section, SECTION_ALL_ACCESS, &attr )))
+    {
+        ERR( "failed to open the hypervisor shared data section: %08x\n", status );
+        exit(1);
+    }
+    if ((res = server_get_unix_fd( section, 0, &fd, &needs_close, NULL, NULL )) ||
+        (hypervisor_shared_data != mmap( hypervisor_shared_data, page_size, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0 )))
+    {
+        ERR( "failed to remap the process hypervisor shared data: %d\n", res );
+        exit(1);
+    }
+    if (needs_close) close( fd );
+    NtClose( section );
+}
+
+
+/***********************************************************************
  *           grow_thread_stack
  */
 static NTSTATUS grow_thread_stack( char *page, struct thread_stack_info *stack_info )
@@ -3370,6 +3463,19 @@ static NTSTATUS grow_thread_stack( char *page, struct thread_stack_info *stack_i
     }
     else NtCurrentTeb()->Tib.StackLimit = page;
     return ret;
+}
+
+BOOL CDECL __wine_needs_override_large_address_aware(void)
+{
+    static int needs_override = -1;
+
+    if (needs_override == -1)
+    {
+        const char *str = getenv( "WINE_LARGE_ADDRESS_AWARE" );
+
+        needs_override = !str || atoi(str) == 1;
+    }
+    return needs_override;
 }
 
 
@@ -3681,6 +3787,32 @@ BOOL virtual_check_buffer_for_read( const void *ptr, SIZE_T size )
     }
     __ENDTRY
     return TRUE;
+}
+
+
+/***********************************************************************
+ *           virtual_check_buffer_write_access
+ * Check if a memory buffer is writable, temporarily disabling write watches if necessary.
+ */
+BOOL virtual_check_buffer_write_access( void *ptr, SIZE_T size )
+{
+    size_t i;
+    char *addr;
+    BOOL ret = TRUE;
+
+    if (!size) return TRUE;
+    if (!ptr) return FALSE;
+
+    addr = ROUND_ADDR( ptr, page_mask );
+    size = ROUND_SIZE( ptr, size );
+    for (i = 0; i < size; i += page_size)
+    {
+        BYTE vprot = get_page_vprot( addr + i );
+        if (vprot & VPROT_WRITECOPY) vprot |= VPROT_WRITE;
+        if (!(get_unix_prot( vprot & ~VPROT_WRITEWATCH ) & PROT_WRITE))
+            ret = FALSE;
+    }
+    return ret;
 }
 
 
@@ -4472,34 +4604,113 @@ static NTSTATUS get_working_set_ex( HANDLE process, LPCVOID addr,
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS read_nt_symlink( UNICODE_STRING *name, WCHAR *target, DWORD size )
+{
+    NTSTATUS status;
+    OBJECT_ATTRIBUTES attr;
+    HANDLE handle;
+
+    attr.Length = sizeof(attr);
+    attr.RootDirectory = 0;
+    attr.Attributes = OBJ_CASE_INSENSITIVE;
+    attr.ObjectName = name;
+    attr.SecurityDescriptor = NULL;
+    attr.SecurityQualityOfService = NULL;
+
+    if (!(status = NtOpenSymbolicLinkObject( &handle, SYMBOLIC_LINK_QUERY, &attr )))
+    {
+        UNICODE_STRING targetW;
+        targetW.Buffer = target;
+        targetW.MaximumLength = (size - 1) * sizeof(WCHAR);
+        status = NtQuerySymbolicLinkObject( handle, &targetW, NULL );
+        if (!status) target[targetW.Length / sizeof(WCHAR)] = 0;
+        NtClose( handle );
+    }
+    return status;
+}
+
+static NTSTATUS follow_device_symlink( WCHAR *name, SIZE_T max_path_len, WCHAR *buffer,
+                                       SIZE_T buffer_len, SIZE_T *current_path_len )
+{
+    WCHAR *p;
+    NTSTATUS status = STATUS_SUCCESS;
+    SIZE_T devname_len = 6 * sizeof(WCHAR); // e.g. \??\C:
+    UNICODE_STRING devname;
+    SIZE_T target_len;
+
+    if (*current_path_len > buffer_len) return STATUS_INVALID_PARAMETER;
+
+    if (*current_path_len >= devname_len && buffer[devname_len / sizeof(WCHAR) - 1] == ':') {
+        devname.Buffer = buffer;
+        devname.Length = devname_len;
+
+        p = buffer + (*current_path_len / sizeof(WCHAR));
+        if (!(status = read_nt_symlink( &devname, p, (buffer_len - *current_path_len) / sizeof(WCHAR) )))
+        {
+            *current_path_len -= devname_len; // skip the device name
+            target_len = lstrlenW(p) * sizeof(WCHAR);
+            *current_path_len += target_len;
+
+            if (*current_path_len <= max_path_len)
+            {
+                memcpy( name, p, target_len );
+                p = buffer + devname_len / sizeof(WCHAR);
+                memcpy( name + target_len / sizeof(WCHAR), p, *current_path_len - target_len);
+            }
+            else status = STATUS_BUFFER_OVERFLOW;
+        }
+    }
+    else if (*current_path_len <= max_path_len) {
+        memcpy( name, buffer, *current_path_len );
+    }
+    else status = STATUS_BUFFER_OVERFLOW;
+
+    return status;
+}
+
 static NTSTATUS get_memory_section_name( HANDLE process, LPCVOID addr,
                                          MEMORY_SECTION_NAME *info, SIZE_T len, SIZE_T *ret_len )
 {
+    SIZE_T current_path_len, max_path_len = 0;
+    // buffer to hold the path + 6 chars devname (e.g. \??\C:)
+    SIZE_T buffer_len = (MAX_PATH + 6) * sizeof(WCHAR);
+    WCHAR *buffer = NULL;
     NTSTATUS status;
 
     if (!info) return STATUS_ACCESS_VIOLATION;
+    if (!(buffer = malloc( buffer_len ))) return STATUS_NO_MEMORY;
+    if (len > sizeof(*info) + sizeof(WCHAR))
+    {
+        max_path_len = len - sizeof(*info) - sizeof(WCHAR); // dont count null char
+    }
 
     SERVER_START_REQ( get_mapping_filename )
     {
         req->process = wine_server_obj_handle( process );
         req->addr = wine_server_client_ptr( addr );
-        if (len > sizeof(*info) + sizeof(WCHAR))
-            wine_server_set_reply( req, info + 1, len - sizeof(*info) - sizeof(WCHAR) );
+        wine_server_set_reply( req, buffer, MAX_PATH );
         status = wine_server_call( req );
-        if (!status || status == STATUS_BUFFER_OVERFLOW)
+        if (!status)
         {
-            if (ret_len) *ret_len = sizeof(*info) + reply->len + sizeof(WCHAR);
-            if (len < sizeof(*info)) status = STATUS_INFO_LENGTH_MISMATCH;
+            current_path_len = reply->len;
+            status = follow_device_symlink( (WCHAR *)(info + 1), max_path_len, buffer, buffer_len, &current_path_len);
+            if (len < sizeof(*info))
+            {
+                status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+
+            if (ret_len) *ret_len = sizeof(*info) + current_path_len + sizeof(WCHAR);
             if (!status)
             {
                 info->SectionFileName.Buffer = (WCHAR *)(info + 1);
-                info->SectionFileName.Length = reply->len;
-                info->SectionFileName.MaximumLength = reply->len + sizeof(WCHAR);
-                info->SectionFileName.Buffer[reply->len / sizeof(WCHAR)] = 0;
+                info->SectionFileName.Length = current_path_len;
+                info->SectionFileName.MaximumLength = current_path_len + sizeof(WCHAR);
+                info->SectionFileName.Buffer[current_path_len / sizeof(WCHAR)] = 0;
             }
         }
     }
     SERVER_END_REQ;
+    free(buffer);
     return status;
 }
 

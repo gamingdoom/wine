@@ -42,6 +42,7 @@
 #include "winternl.h"
 #include "wine/condrv.h"
 #include "esync.h"
+#include "fsync.h"
 
 struct screen_buffer;
 
@@ -83,6 +84,7 @@ static const struct object_ops console_ops =
     remove_queue,                     /* remove_queue */
     console_signaled,                 /* signaled */
     NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     console_get_fd,                   /* get_fd */
@@ -142,12 +144,14 @@ struct console_server
     int                   term_fd;     /* UNIX terminal fd */
     struct termios        termios;     /* original termios */
     int                   esync_fd;
+    unsigned int          fsync_idx;
 };
 
 static void console_server_dump( struct object *obj, int verbose );
 static void console_server_destroy( struct object *obj );
 static int console_server_signaled( struct object *obj, struct wait_queue_entry *entry );
 static int console_server_get_esync_fd( struct object *obj, enum esync_type *type );
+static unsigned int console_server_get_fsync_idx( struct object *obj, enum fsync_type *type );
 static struct fd *console_server_get_fd( struct object *obj );
 static struct object *console_server_lookup_name( struct object *obj, struct unicode_str *name,
                                                 unsigned int attr, struct object *root );
@@ -163,6 +167,7 @@ static const struct object_ops console_server_ops =
     remove_queue,                     /* remove_queue */
     console_server_signaled,          /* signaled */
     console_server_get_esync_fd,      /* get_esync_fd */
+    console_server_get_fsync_idx,     /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     console_server_get_fd,            /* get_fd */
@@ -233,6 +238,7 @@ static const struct object_ops screen_buffer_ops =
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
     NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     NULL,                             /* satisfied */
     no_signal,                        /* signal */
     screen_buffer_get_fd,             /* get_fd */
@@ -283,6 +289,7 @@ static const struct object_ops console_device_ops =
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
     NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     no_get_fd,                        /* get_fd */
@@ -321,6 +328,7 @@ static const struct object_ops console_input_ops =
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
     NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     console_input_get_fd,             /* get_fd */
@@ -379,6 +387,7 @@ static const struct object_ops console_output_ops =
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
     NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     console_output_get_fd,            /* get_fd */
@@ -438,6 +447,7 @@ static const struct object_ops console_connection_ops =
     NULL,                             /* remove_queue */
     NULL,                             /* signaled */
     NULL,                             /* get_esync_fd */
+    NULL,                             /* get_fsync_idx */
     no_satisfied,                     /* satisfied */
     no_signal,                        /* signal */
     console_connection_get_fd,        /* get_fd */
@@ -600,8 +610,13 @@ static void disconnect_console_server( struct console_server *server )
         list_remove( &call->entry );
         console_host_ioctl_terminate( call, STATUS_CANCELLED );
     }
+
+    if (do_fsync())
+        fsync_clear_futex( server->fsync_idx );
+
     if (do_esync())
         esync_clear( server->esync_fd );
+
     while (!list_empty( &server->read_queue ))
     {
         struct console_host_ioctl *call = LIST_ENTRY( list_head( &server->read_queue ), struct console_host_ioctl, entry );
@@ -861,6 +876,7 @@ static void console_server_destroy( struct object *obj )
     assert( obj->ops == &console_server_ops );
     disconnect_console_server( server );
     if (server->fd) release_object( server->fd );
+    if (do_esync()) close( server->esync_fd );
 }
 
 static struct object *console_server_lookup_name( struct object *obj, struct unicode_str *name,
@@ -909,6 +925,13 @@ static int console_server_get_esync_fd( struct object *obj, enum esync_type *typ
     return server->esync_fd;
 }
 
+static unsigned int console_server_get_fsync_idx( struct object *obj, enum fsync_type *type )
+{
+    struct console_server *server = (struct console_server*)obj;
+    *type = FSYNC_MANUAL_SERVER;
+    return server->fsync_idx;
+}
+
 static struct fd *console_server_get_fd( struct object* obj )
 {
     struct console_server *server = (struct console_server*)obj;
@@ -941,6 +964,9 @@ static struct object *create_console_server( void )
     }
     allow_fd_caching(server->fd);
     server->esync_fd = -1;
+
+    if (do_fsync())
+        server->fsync_idx = fsync_alloc_shm( 0, 0 );
 
     if (do_esync())
         server->esync_fd = esync_create_fd( 0, 0 );
@@ -1529,6 +1555,10 @@ DECL_HANDLER(get_next_console_request)
         /* set result of previous ioctl */
         ioctl = LIST_ENTRY( list_head( &server->queue ), struct console_host_ioctl, entry );
         list_remove( &ioctl->entry );
+
+        if (do_fsync() && list_empty( &server->queue ))
+            fsync_clear_futex( server->fsync_idx );
+
         if (do_esync() && list_empty( &server->queue ))
             esync_clear( server->esync_fd );
     }
@@ -1616,6 +1646,10 @@ DECL_HANDLER(get_next_console_request)
     {
         set_error( STATUS_PENDING );
     }
+
+    if (do_fsync() && list_empty( &server->queue ))
+        fsync_clear_futex( server->fsync_idx );
+
     if (do_esync() && list_empty( &server->queue ))
         esync_clear( server->esync_fd );
 
