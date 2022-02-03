@@ -128,9 +128,6 @@ XContext cursor_context = 0;
 static HWND cursor_window;
 static HCURSOR last_cursor;
 static DWORD last_cursor_change;
-static RECT last_clip_rect;
-static HWND last_clip_foreground_window;
-static BOOL last_clip_refused;
 static RECT clip_rect;
 static Cursor create_cursor( HANDLE handle );
 
@@ -355,6 +352,7 @@ static void update_relative_valuators( XIAnyClassInfo **classes, int num_classes
     thread_data->x_valuator.value = 0;
     thread_data->y_valuator.value = 0;
 }
+#endif
 
 
 /***********************************************************************
@@ -388,6 +386,7 @@ void x11drv_xinput_init(void)
  */
 void x11drv_xinput_enable( Display *display, Window window, long event_mask )
 {
+#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
     struct x11drv_thread_data *data = x11drv_thread_data();
     XIEventMask mask;
     XIDeviceInfo *pointer_info;
@@ -438,9 +437,8 @@ void x11drv_xinput_enable( Display *display, Window window, long event_mask )
     pXIFreeDeviceInfo( pointer_info );
 
     data->xi2_state = xi_enabled;
-}
-
 #endif
+}
 
 /***********************************************************************
  *              x11drv_xinput_disable
@@ -491,12 +489,12 @@ void x11drv_xinput_disable( Display *display, Window window, long event_mask )
  */
 static BOOL grab_clipping_window( const RECT *clip )
 {
-#if HAVE_X11_EXTENSIONS_XINPUT2_H
     static const WCHAR messageW[] = {'M','e','s','s','a','g','e',0};
     struct x11drv_thread_data *data = x11drv_thread_data();
     Window clip_window;
     HWND msg_hwnd = 0;
     POINT pos;
+    RECT real_clip;
 
     if (GetWindowThreadProcessId( GetDesktopWindow(), NULL ) == GetCurrentThreadId())
         return TRUE;  /* don't clip in the desktop process */
@@ -507,19 +505,6 @@ static BOOL grab_clipping_window( const RECT *clip )
     if (!(msg_hwnd = CreateWindowW( messageW, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, 0,
                                     GetModuleHandleW(0), NULL )))
         return TRUE;
-
-    if (keyboard_grabbed)
-    {
-        WARN( "refusing to clip to %s\n", wine_dbgstr_rect(clip) );
-        last_clip_refused = TRUE;
-        last_clip_foreground_window = GetForegroundWindow();
-        last_clip_rect = *clip;
-        return FALSE;
-    }
-    else
-    {
-        last_clip_refused = FALSE;
-    }
 
     /* enable XInput2 unless we are already clipping */
     if (!data->clip_hwnd) x11drv_xinput_enable( data->display, DefaultRootWindow( data->display ), PointerMotionMask );
@@ -535,9 +520,21 @@ static BOOL grab_clipping_window( const RECT *clip )
     TRACE( "clipping to %s win %lx\n", wine_dbgstr_rect(clip), clip_window );
 
     if (!data->clip_hwnd) XUnmapWindow( data->display, clip_window );
+
+    TRACE("user clip rect %s\n", wine_dbgstr_rect(clip));
+
+    real_clip = *clip;
+    fs_hack_rect_user_to_real(&real_clip);
+
     pos = virtual_screen_to_root( clip->left, clip->top );
+
+    TRACE("setting real clip to %d,%d x %d,%d\n",
+            pos.x, pos.y,
+            real_clip.right - real_clip.left,
+            real_clip.bottom - real_clip.top);
+
     XMoveResizeWindow( data->display, clip_window, pos.x, pos.y,
-                       max( 1, clip->right - clip->left ), max( 1, clip->bottom - clip->top ) );
+                       max( 1, real_clip.right - real_clip.left ), max( 1, real_clip.bottom - real_clip.top ) );
     XMapWindow( data->display, clip_window );
 
     /* if the rectangle is shrinking we may get a pointer warp */
@@ -562,10 +559,6 @@ static BOOL grab_clipping_window( const RECT *clip )
     data->clip_hwnd = msg_hwnd;
     SendNotifyMessageW( GetDesktopWindow(), WM_X11DRV_CLIP_CURSOR_NOTIFY, 0, (LPARAM)msg_hwnd );
     return TRUE;
-#else
-    WARN( "XInput2 was not available at compile time\n" );
-    return FALSE;
-#endif
 }
 
 /***********************************************************************
@@ -582,7 +575,11 @@ void ungrab_clipping_window(void)
 
     TRACE( "no longer clipping\n" );
     XUnmapWindow( display, clip_window );
-    if (clipping_cursor) XUngrabPointer( display, CurrentTime );
+    if (clipping_cursor)
+    {
+        XUngrabPointer( display, CurrentTime );
+        XFlush( display );
+    }
     clipping_cursor = FALSE;
     SendNotifyMessageW( GetDesktopWindow(), WM_X11DRV_CLIP_CURSOR_NOTIFY, 0, 0 );
 }
@@ -596,20 +593,6 @@ void reset_clipping_window(void)
 {
     ungrab_clipping_window();
     ClipCursor( NULL );  /* make sure the clip rectangle is reset too */
-}
-
-/***********************************************************************
- *      retry_grab_clipping_window
- *
- * Restore the current clip rectangle or retry the last one if it has
- * been refused because of an active keyboard grab.
- */
-void retry_grab_clipping_window(void)
-{
-    if (clipping_cursor)
-        ClipCursor( &clip_rect );
-    else if (last_clip_refused && GetForegroundWindow() == last_clip_foreground_window)
-        ClipCursor( &last_clip_rect );
 }
 
 /***********************************************************************
@@ -674,9 +657,10 @@ BOOL clip_fullscreen_window( HWND hwnd, BOOL reset )
     release_win_data( data );
     if (!fullscreen) return FALSE;
     if (!(thread_data = x11drv_thread_data())) return FALSE;
-    if (GetTickCount() - thread_data->clip_reset < 1000) return FALSE;
-    if (!reset && clipping_cursor && thread_data->clip_hwnd) return FALSE;  /* already clipping */
-
+    if (!reset) {
+        if (GetTickCount() - thread_data->clip_reset < 1000) return FALSE;
+        if (!reset && clipping_cursor && thread_data->clip_hwnd) return FALSE;  /* already clipping */
+    }
     monitor = MonitorFromWindow( hwnd, MONITOR_DEFAULTTONEAREST );
     if (!monitor) return FALSE;
     monitor_info.cbSize = sizeof(monitor_info);
@@ -734,7 +718,10 @@ static void map_event_coords( HWND hwnd, Window window, Window event_root, int x
         else if (event_root == root_window) pt = root_to_virtual_screen( x_root, y_root );
         else
         {
-            if (window == data->whole_window)
+            if(data->fs_hack)
+                fs_hack_point_real_to_user(&pt);
+
+            if (window == data->whole_window && !data->fs_hack)
             {
                 pt.x += data->whole_rect.left - data->client_rect.left;
                 pt.y += data->whole_rect.top - data->client_rect.top;
@@ -753,6 +740,82 @@ static void map_event_coords( HWND hwnd, Window window, Window event_root, int x
     input->u.mi.dy = pt.y;
 }
 
+static BOOL map_raw_event_coords( XIRawEvent *event, INPUT *input, RAWINPUT *rawinput )
+{
+    struct x11drv_thread_data *thread_data = x11drv_thread_data();
+    XIValuatorClassInfo *x = &thread_data->x_valuator, *y = &thread_data->y_valuator;
+    const double *values = event->valuators.values, *raw_values = event->raw_values;
+    double x_raw = 0, y_raw = 0, x_value = 0, y_value = 0, x_scale, y_scale;
+    RECT virtual_rect;
+    int i;
+    POINT pt;
+    HMONITOR monitor;
+    double user_to_real_scale;
+
+    if (x->number < 0 || y->number < 0) return FALSE;
+    if (!event->valuators.mask_len) return FALSE;
+    if (thread_data->xi2_state != xi_enabled) return FALSE;
+    if (event->deviceid != thread_data->xi2_core_pointer) return FALSE;
+
+    if (x->mode == XIModeRelative && y->mode == XIModeRelative)
+        input->u.mi.dwFlags &= ~(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK);
+    else if (x->mode == XIModeAbsolute && y->mode == XIModeAbsolute)
+        input->u.mi.dwFlags |= MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    else
+        FIXME( "Unsupported relative/absolute X/Y axis mismatch\n." );
+
+    GetCursorPos(&pt);
+    monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONULL);
+    user_to_real_scale = fs_hack_get_user_to_real_scale(monitor);
+    input->u.mi.dx = lround((double)input->u.mi.dx / user_to_real_scale);
+    input->u.mi.dy = lround((double)input->u.mi.dy / user_to_real_scale);
+
+    if (input->u.mi.dwFlags & MOUSEEVENTF_VIRTUALDESK) SetRect( &virtual_rect, 0, 0, 65535, 65535 );
+    else virtual_rect = get_virtual_screen_rect();
+
+    if (x->max <= x->min) x_scale = 1;
+    else x_scale = (virtual_rect.right - virtual_rect.left) / (x->max - x->min);
+    if (y->max <= y->min) y_scale = 1;
+    else y_scale = (virtual_rect.bottom - virtual_rect.top) / (y->max - y->min);
+
+    for (i = 0; i <= max( x->number, y->number ); i++)
+    {
+        if (!XIMaskIsSet( event->valuators.mask, i )) continue;
+        if (i == x->number)
+        {
+            x_raw = *raw_values;
+            x_value = *values;
+            if (x->mode == XIModeRelative) x->value += x_value * x_scale;
+            else x->value = (x_value - x->min) * x_scale;
+        }
+        if (i == y->number)
+        {
+            y_raw = *raw_values;
+            y_value = *values;
+            if (y->mode == XIModeRelative) y->value += y_value * y_scale;
+            else y->value = (y_value - y->min) * y_scale;
+        }
+        raw_values++;
+        values++;
+    }
+
+    input->u.mi.dx = round( x->value );
+    input->u.mi.dy = round( y->value );
+
+    if (x->mode != XIModeAbsolute) rawinput->data.mouse.lLastX = x_raw;
+    else rawinput->data.mouse.lLastX = input->u.mi.dx;
+    if (y->mode != XIModeAbsolute) rawinput->data.mouse.lLastY = y_raw;
+    else rawinput->data.mouse.lLastY = input->u.mi.dy;
+
+    TRACE( "event %f,%f value %f,%f input %d,%d\n", x_value, y_value, x->value, y->value, input->u.mi.dx, input->u.mi.dy );
+
+    x->value -= input->u.mi.dx;
+    y->value -= input->u.mi.dy;
+
+    return TRUE;
+}
+
+
 /***********************************************************************
  *		send_mouse_input
  *
@@ -768,6 +831,7 @@ static void send_mouse_input( HWND hwnd, Window window, unsigned int state, INPU
     {
         struct x11drv_thread_data *thread_data = x11drv_thread_data();
         HWND clip_hwnd = thread_data->clip_hwnd;
+        POINT pt;
 
         if (!clip_hwnd) return;
         if (thread_data->clip_window != window) return;
@@ -777,6 +841,18 @@ static void send_mouse_input( HWND hwnd, Window window, unsigned int state, INPU
             sync_window_cursor( window );
             last_cursor_change = input->u.mi.time;
         }
+
+        pt.x = clip_rect.left;
+        pt.y = clip_rect.top;
+        fs_hack_point_user_to_real(&pt);
+
+        pt.x += input->u.mi.dx;
+        pt.y += input->u.mi.dy;
+        fs_hack_point_real_to_user(&pt);
+
+        input->u.mi.dx = pt.x;
+        input->u.mi.dy = pt.y;
+
         __wine_send_input( hwnd, input, NULL );
         return;
     }
@@ -1605,30 +1681,14 @@ BOOL CDECL X11DRV_SetCursorPos( INT x, INT y )
     struct x11drv_thread_data *data = x11drv_init_thread_data();
     POINT pos = virtual_screen_to_root( x, y );
 
-    if (keyboard_grabbed)
-    {
-        WARN( "refusing to warp to %u, %u\n", pos.x, pos.y );
-        return FALSE;
-    }
-
-    if (!clipping_cursor &&
-        XGrabPointer( data->display, root_window, False,
-                      PointerMotionMask | ButtonPressMask | ButtonReleaseMask,
-                      GrabModeAsync, GrabModeAsync, None, None, CurrentTime ) != GrabSuccess)
-    {
-        WARN( "refusing to warp pointer to %u, %u without exclusive grab\n", pos.x, pos.y );
-        return FALSE;
-    }
+    TRACE("real setting to %u, %u\n",
+            pos.x, pos.y);
 
     XWarpPointer( data->display, root_window, root_window, 0, 0, 0, 0, pos.x, pos.y );
     data->warp_serial = NextRequest( data->display );
-
-    if (!clipping_cursor)
-        XUngrabPointer( data->display, CurrentTime );
-
     XNoOp( data->display );
     XFlush( data->display ); /* avoids bad mouse lag in games that do their own mouse warping */
-    TRACE( "warped to %d,%d serial %lu\n", x, y, data->warp_serial );
+    TRACE( "warped to (fake) %d,%d serial %lu\n", x, y, data->warp_serial );
     return TRUE;
 }
 
@@ -1682,12 +1742,12 @@ BOOL CDECL X11DRV_ClipCursor( LPCRECT clip )
         {
             if (grab_clipping_window( clip )) return TRUE;
         }
-        else /* if currently clipping, check if we should switch to fullscreen clipping */
+        else /* check if we should switch to fullscreen clipping */
         {
             struct x11drv_thread_data *data = x11drv_thread_data();
-            if (data && data->clip_hwnd)
+            if (data)
             {
-                if (EqualRect( clip, &clip_rect ) || clip_fullscreen_window( foreground, TRUE ))
+                if ((data->clip_hwnd && EqualRect( clip, &clip_rect ) && !EqualRect(&clip_rect, &virtual_rect)) || clip_fullscreen_window( foreground, TRUE ))
                     return TRUE;
             }
         }
@@ -1936,72 +1996,6 @@ static BOOL X11DRV_DeviceChanged( XGenericEventCookie *xev )
 
     update_relative_valuators( event->classes, event->num_classes );
     update_device_mapping( event->display, event->sourceid );
-
-    return TRUE;
-}
-
-static BOOL map_raw_event_coords( XIRawEvent *event, INPUT *input, RAWINPUT *rawinput )
-{
-    struct x11drv_thread_data *thread_data = x11drv_thread_data();
-    XIValuatorClassInfo *x = &thread_data->x_valuator, *y = &thread_data->y_valuator;
-    const double *values = event->valuators.values, *raw_values = event->raw_values;
-    double x_raw = 0, y_raw = 0, x_value = 0, y_value = 0, x_scale, y_scale;
-    RECT virtual_rect;
-    int i;
-
-    if (x->number < 0 || y->number < 0) return FALSE;
-    if (!event->valuators.mask_len) return FALSE;
-    if (thread_data->xi2_state != xi_enabled) return FALSE;
-    if (event->deviceid != thread_data->xi2_core_pointer) return FALSE;
-
-    if (x->mode == XIModeRelative && y->mode == XIModeRelative)
-        input->u.mi.dwFlags &= ~(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK);
-    else if (x->mode == XIModeAbsolute && y->mode == XIModeAbsolute)
-        input->u.mi.dwFlags |= MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    else
-        FIXME( "Unsupported relative/absolute X/Y axis mismatch\n." );
-
-    if (input->u.mi.dwFlags & MOUSEEVENTF_VIRTUALDESK) SetRect( &virtual_rect, 0, 0, 65535, 65535 );
-    else virtual_rect = get_virtual_screen_rect();
-
-    if (x->max <= x->min) x_scale = 1;
-    else x_scale = (virtual_rect.right - virtual_rect.left) / (x->max - x->min);
-    if (y->max <= y->min) y_scale = 1;
-    else y_scale = (virtual_rect.bottom - virtual_rect.top) / (y->max - y->min);
-
-    for (i = 0; i <= max( x->number, y->number ); i++)
-    {
-        if (!XIMaskIsSet( event->valuators.mask, i )) continue;
-        if (i == x->number)
-        {
-            x_raw = *raw_values;
-            x_value = *values;
-            if (x->mode == XIModeRelative) x->value += x_value * x_scale;
-            else x->value = (x_value - x->min) * x_scale;
-        }
-        if (i == y->number)
-        {
-            y_raw = *raw_values;
-            y_value = *values;
-            if (y->mode == XIModeRelative) y->value += y_value * y_scale;
-            else y->value = (y_value - y->min) * y_scale;
-        }
-        raw_values++;
-        values++;
-    }
-
-    input->u.mi.dx = round( x->value );
-    input->u.mi.dy = round( y->value );
-
-    if (x->mode != XIModeAbsolute) rawinput->data.mouse.lLastX = x_raw;
-    else rawinput->data.mouse.lLastX = input->u.mi.dx;
-    if (y->mode != XIModeAbsolute) rawinput->data.mouse.lLastY = y_raw;
-    else rawinput->data.mouse.lLastY = input->u.mi.dy;
-
-    TRACE( "event %f,%f value %f,%f input %d,%d\n", x_value, y_value, x->value, y->value, input->u.mi.dx, input->u.mi.dy );
-
-    x->value -= input->u.mi.dx;
-    y->value -= input->u.mi.dy;
 
     return TRUE;
 }
