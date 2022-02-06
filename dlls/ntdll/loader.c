@@ -3189,6 +3189,24 @@ done:
 
 
 /***********************************************************************
+ *              __wine_init_unix_lib
+ */
+NTSTATUS __cdecl __wine_init_unix_lib( HMODULE module, DWORD reason, const void *ptr_in, void *ptr_out )
+{
+    WINE_MODREF *wm;
+    NTSTATUS ret;
+
+    RtlEnterCriticalSection( &loader_section );
+
+    if ((wm = get_modref( module ))) ret = unix_funcs->init_unix_lib( module, reason, ptr_in, ptr_out );
+    else ret = STATUS_INVALID_HANDLE;
+
+    RtlLeaveCriticalSection( &loader_section );
+    return ret;
+}
+
+
+/***********************************************************************
  *              __wine_ctrl_routine
  */
 NTSTATUS WINAPI __wine_ctrl_routine( void *arg )
@@ -4198,11 +4216,11 @@ void WINAPI LdrInitializeThunk( CONTEXT *context, ULONG_PTR unknown2, ULONG_PTR 
     InitializeObjectAttributes( &staging_event_attr, &staging_event_string, OBJ_OPENIF, NULL, NULL );
     if (NtCreateEvent( &staging_event, EVENT_ALL_ACCESS, &staging_event_attr, NotificationEvent, FALSE ) == STATUS_SUCCESS)
     {
-        FIXME_(winediag)("wine-staging %s is a testing version containing experimental patches.\n", wine_get_version());
-        FIXME_(winediag)("Please mention your exact version when filing bug reports on winehq.org.\n");
+        FIXME_(winediag)("Wine TkG (staging) %s is a testing version containing experimental patches.\n", wine_get_version());
+        FIXME_(winediag)("Please don't report bugs about it on winehq.org and use https://github.com/Frogging-Family/wine-tkg-git/issues instead.\n");
     }
     else
-        WARN_(winediag)("wine-staging %s is a testing version containing experimental patches.\n", wine_get_version());
+        WARN_(winediag)("Wine TkG (staging) %s is a testing version containing experimental patches.\n", wine_get_version());
 
     RtlAcquirePebLock();
     InsertHeadList( &tls_links, &NtCurrentTeb()->TlsLinks );
@@ -4600,6 +4618,11 @@ static void CDECL init_builtin_dll_fallback( void *module )
 {
 }
 
+static NTSTATUS CDECL init_unix_lib_fallback( void *module, DWORD reason, const void *ptr_in, void *ptr_out )
+{
+    return STATUS_DLL_NOT_FOUND;
+}
+
 static NTSTATUS CDECL unwind_builtin_dll_fallback( ULONG type, struct _DISPATCHER_CONTEXT *dispatch,
                                                    CONTEXT *context )
 {
@@ -4617,6 +4640,7 @@ static const struct unix_funcs unix_fallbacks =
 {
     load_so_dll_fallback,
     init_builtin_dll_fallback,
+    init_unix_lib_fallback,
     unwind_builtin_dll_fallback,
     RtlGetSystemTimePrecise_fallback,
 };
