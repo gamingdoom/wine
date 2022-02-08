@@ -1,0 +1,36 @@
+# Last wine-tkg-staging-fsync-git configuration - Ср 09 фев 2022 00:17:38 MSK :
+
+External configuration file ~/git_projects/buildbot/runners/wine/build-preparation/wine-tkg-git/wine-tkg.cfg used
+
+Wine (plain) version: 7.1.r0.g594e431e36d
+Using wine-staging patchset (version 7.1.r0.gf5ca8f5a)
+
+Disabled the local Esync patchset to use Staging impl instead.
+Not using vkd3d native library for d3d12 translation (allows using vkd3d-proton)
+
+Done applying reverting hotfixes (if any) - list available in prepare.log
+
+Applied hotfix protonify_stg_syscall_emu-009.mystagingpatch
+steam.patch -- ( Applied steam crossover hack )
+CSMT-toggle.patch -- ( Applied CSMT toggle logic patch )
+
+Staging overrides, if any: -W winex11-_NET_ACTIVE_WINDOW -W winex11-WM_WINDOWPOSCHANGING -W winemenubuilder-integration -W dbghelp-Debug_Symbols -W xactengine3_7-callbacks
+
+use_clock_monotonic-staging.patch -- ( Applied clock_monotonic patch )
+fsync-unix-staging.patch -- ( Applied fsync, an experimental replacement for esync (unix, staging) )
+fsync_futex_waitv.patch -- ( Replace all fsync interfaces with futex_waitv )
+
+LAA-unix-staging.patch -- ( Applied large address aware override support )
+
+rdr2.patch -- ( Enable Proton's RDR2 fixes from Paul Gofman )
+josh-flat-theme.patch -- ( Add Josh's better-theme )
+
+Applied reverting hotfix f0cd33c-1.myrevert
+Applied reverting hotfix d8be858.myrevert
+Applied hotfix Return_nt_filename_and_resolve_DOS_drive_path.mypatch
+Applied hotfix ef6e33f.mypatch
+Applied hotfix 0001-proton-bcrypt_rdr2_fixes3.mypatch
+Applied hotfix 0002-bcrypt-Add-support-for-calculating-secret-ecc-keys.mypatch
+Applied hotfix a608ef1.mypatch
+
+wine-tkg-staging.patch -- ( Please don't report bugs about this wine build on winehq.org and use https://github.com/Frogging-Family/wine-tkg-git/issues instead. )
