@@ -319,8 +319,13 @@ struct user_driver_funcs
                                        const RECT *,struct window_surface*);
     /* system parameters */
     BOOL    (CDECL *pSystemParametersInfo)(UINT,UINT,void*,UINT);
+
     /* vulkan support */
     const struct vulkan_funcs * (CDECL *pwine_get_vulkan_driver)(UINT);
+
+    /* IME functions */
+    void    (CDECL *pUpdateCandidatePos)(HWND, const RECT *);
+
     /* thread management */
     void    (CDECL *pThreadDetach)(void);
 };
