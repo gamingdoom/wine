@@ -19,10 +19,9 @@
 
 #include "gst_private.h"
 
+#include "mfapi.h"
 #include "ks.h"
 #include "ksmedia.h"
-#include "initguid.h"
-#include "mfapi.h"
 
 #include "wine/debug.h"
 

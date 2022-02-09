@@ -2,7 +2,7 @@ EXTRADEFS = -DWINE_NO_LONG_TYPES
 MODULE    = winegstreamer.dll
 UNIXLIB   = winegstreamer.so
 IMPORTLIB = winegstreamer
-IMPORTS   = strmbase ole32
+IMPORTS   = strmbase strmiids uuid ole32 mfuuid
 DELAYIMPORTS = mfplat
 EXTRAINCL = $(GSTREAMER_CFLAGS)
 EXTRALIBS = $(GSTREAMER_LIBS) $(PTHREAD_LIBS)
@@ -15,7 +15,6 @@ C_SRCS = \
 	quartz_parser.c \
 	wg_parser.c \
 	wm_asyncreader.c \
-	wm_reader.c \
 	wm_syncreader.c
 
 IDL_SRCS = \
