@@ -53,6 +53,8 @@ struct ntdll_thread_data
 {
     void              *cpu_data[16];  /* reserved for CPU-specific data */
     void              *kernel_stack;  /* stack for thread startup and kernel syscalls */
+    int                esync_apc_fd;  /* fd to wait on for user APCs */
+    int               *fsync_apc_futex;
     int                request_fd;    /* fd for sending server requests */
     int                reply_fd;      /* fd for receiving server replies */
     int                wait_fd[2];    /* fd for sleeping server requests */
@@ -77,6 +79,7 @@ struct async_fileio
 {
     async_callback_t    *callback;
     struct async_fileio *next;
+    DWORD                size;
     HANDLE               handle;
 };
 
@@ -142,6 +145,8 @@ extern BOOL is_wow64 DECLSPEC_HIDDEN;
 #ifdef __i386__
 extern struct ldt_copy __wine_ldt_copy DECLSPEC_HIDDEN;
 #endif
+
+extern BOOL ac_odyssey DECLSPEC_HIDDEN;
 
 extern void init_environment( int argc, char *argv[], char *envp[] ) DECLSPEC_HIDDEN;
 extern void init_startup_info(void) DECLSPEC_HIDDEN;
@@ -223,7 +228,9 @@ extern void virtual_fill_image_information( const pe_image_info_t *pe_info,
                                             SECTION_IMAGE_INFORMATION *info ) DECLSPEC_HIDDEN;
 extern void release_builtin_module( void *module ) DECLSPEC_HIDDEN;
 extern void *get_builtin_so_handle( void *module ) DECLSPEC_HIDDEN;
-extern NTSTATUS load_builtin_unixlib( void *module, const char *name ) DECLSPEC_HIDDEN;
+extern NTSTATUS get_builtin_unix_info( void *module, const char **name, void **handle, void **entry ) DECLSPEC_HIDDEN;
+extern NTSTATUS set_builtin_unix_handle( void *module, const char *name, void *handle ) DECLSPEC_HIDDEN;
+extern NTSTATUS set_builtin_unix_entry( void *module, void *entry ) DECLSPEC_HIDDEN;
 
 extern NTSTATUS get_thread_ldt_entry( HANDLE handle, void *data, ULONG len, ULONG *ret_len ) DECLSPEC_HIDDEN;
 extern void *get_native_context( CONTEXT *context ) DECLSPEC_HIDDEN;
@@ -235,6 +242,7 @@ extern NTSTATUS signal_alloc_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_free_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_init_thread( TEB *teb ) DECLSPEC_HIDDEN;
 extern void signal_init_process(void) DECLSPEC_HIDDEN;
+extern void signal_init_early(void) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_start_thread( PRTL_THREAD_START_ROUTINE entry, void *arg,
                                                    BOOL suspend, TEB *teb ) DECLSPEC_HIDDEN;
 extern void DECLSPEC_NORETURN signal_exit_thread( int status, void (*func)(int), TEB *teb ) DECLSPEC_HIDDEN;
@@ -273,6 +281,7 @@ extern NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MA
 extern NTSTATUS get_device_info( int fd, struct _FILE_FS_DEVICE_INFORMATION *info ) DECLSPEC_HIDDEN;
 extern void init_files(void) DECLSPEC_HIDDEN;
 extern void init_cpu_info(void) DECLSPEC_HIDDEN;
+extern struct cpu_topology_override *get_cpu_topology_override(void) DECLSPEC_HIDDEN;
 extern void add_completion( HANDLE handle, ULONG_PTR value, NTSTATUS status, ULONG info, BOOL async ) DECLSPEC_HIDDEN;
 
 extern void dbg_init(void) DECLSPEC_HIDDEN;
@@ -444,5 +453,7 @@ static inline void init_unicode_string( UNICODE_STRING *str, const WCHAR *data )
     str->MaximumLength = str->Length + sizeof(WCHAR);
     str->Buffer = (WCHAR *)data;
 }
+
+BOOL CDECL __wine_needs_override_large_address_aware(void);
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */

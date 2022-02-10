@@ -27,11 +27,13 @@
 #include "config.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -63,6 +65,13 @@
 #endif
 #ifdef __APPLE__
 # include <mach/mach.h>
+#endif
+
+#if defined(HAVE_LINUX_FILTER_H) && defined(HAVE_LINUX_SECCOMP_H) && defined(HAVE_SYS_PRCTL_H)
+#define HAVE_SECCOMP 1
+# include <linux/filter.h>
+# include <linux/seccomp.h>
+# include <sys/prctl.h>
 #endif
 
 #define NONAMELESSUNION
@@ -2456,6 +2465,223 @@ static inline DWORD is_privileged_instr( CONTEXT *context )
     return 0;
 }
 
+#ifdef HAVE_SECCOMP
+static void sigsys_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    ucontext_t *ctx = sigcontext;
+    void ***rsp;
+
+    TRACE("SIGSYS, rax %#llx, rip %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX],
+            ctx->uc_mcontext.gregs[REG_RIP]);
+
+    rsp = (void ***)&ctx->uc_mcontext.gregs[REG_RSP];
+    *rsp -= 1;
+    **rsp = (void *)(ctx->uc_mcontext.gregs[REG_RIP] + 0xb);
+
+    ctx->uc_mcontext.gregs[REG_RIP] = (ULONG64)__wine_syscall_dispatcher;
+}
+
+unsigned int __wine_syscall_nr_NtClose;
+unsigned int __wine_syscall_nr_NtCreateFile;
+unsigned int __wine_syscall_nr_NtGetContextThread;
+unsigned int __wine_syscall_nr_NtQueryInformationProcess;
+unsigned int __wine_syscall_nr_NtQuerySystemInformation;
+unsigned int __wine_syscall_nr_NtQueryVirtualMemory;
+unsigned int __wine_syscall_nr_NtReadFile;
+unsigned int __wine_syscall_nr_NtWriteFile;
+
+static void sigsys_handler_rdr2( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    ULONG64 *dispatcher_address = (ULONG64 *)((char *)user_shared_data + page_size);
+    ucontext_t *ctx = sigcontext;
+    void ***rsp;
+
+    TRACE("SIGSYS, rax %#llx, rip %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX],
+            ctx->uc_mcontext.gregs[REG_RIP]);
+
+    rsp = (void ***)&ctx->uc_mcontext.gregs[REG_RSP];
+    *rsp -= 1;
+    **rsp = (void *)(ctx->uc_mcontext.gregs[REG_RIP] + 0xb);
+
+    ctx->uc_mcontext.gregs[REG_RIP] = *dispatcher_address;
+
+    /* syscall numbers are for Windows 10 2009 (build 19043) */
+    switch (ctx->uc_mcontext.gregs[REG_RAX])
+    {
+        case 0x19:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtQueryInformationProcess;
+            break;
+        case 0x36:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtQuerySystemInformation;
+            break;
+        case 0xf2:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtGetContextThread;
+            break;
+        case 0x55:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtCreateFile;
+            break;
+        case 0x08:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtWriteFile;
+            break;
+        case 0x06:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtReadFile;
+            break;
+        case 0x0f:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtClose;
+            break;
+        case 0x23:
+            ctx->uc_mcontext.gregs[REG_RAX] = __wine_syscall_nr_NtQueryVirtualMemory;
+            break;
+         default:
+            FIXME("Unhandled syscall %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX]);
+            break;
+    }
+}
+#endif
+
+#ifdef HAVE_SECCOMP
+static int sc_seccomp(unsigned int operation, unsigned int flags, void *args)
+{
+#ifndef __NR_seccomp
+#   define __NR_seccomp 317
+#endif
+    return syscall(__NR_seccomp, operation, flags, args);
+}
+#endif
+
+static void check_bpf_jit_enable(void)
+{
+    char enabled;
+    int fd;
+
+    fd = open("/proc/sys/net/core/bpf_jit_enable", O_RDONLY);
+    if (fd == -1)
+    {
+        WARN("Could not open /proc/sys/net/core/bpf_jit_enable.\n");
+        return;
+    }
+
+    if (read(fd, &enabled, sizeof(enabled)) == sizeof(enabled))
+    {
+        TRACE("enabled %#x.\n", enabled);
+
+        if (enabled != '1')
+            ERR("BPF JIT is not enabled in the kernel, enable it to reduce syscall emulation overhead.\n");
+    }
+    else
+    {
+        WARN("Could not read /proc/sys/net/core/bpf_jit_enable.\n");
+    }
+    close(fd);
+}
+
+static void install_bpf(struct sigaction *sig_act)
+{
+#ifdef HAVE_SECCOMP
+#   ifndef SECCOMP_FILTER_FLAG_SPEC_ALLOW
+#       define SECCOMP_FILTER_FLAG_SPEC_ALLOW (1UL << 2)
+#   endif
+
+#   ifndef SECCOMP_SET_MODE_FILTER
+#       define SECCOMP_SET_MODE_FILTER 1
+#   endif
+    static const unsigned int flags = SECCOMP_FILTER_FLAG_SPEC_ALLOW;
+    static struct sock_filter filter[] =
+    {
+       BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                (offsetof(struct seccomp_data, nr))),
+       BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0xf000, 0, 1),
+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    static struct sock_filter filter_rdr2[] =
+    {
+        /* Trap anything called from RDR2 or the launcher (0x140000000 - 0x150000000)*/
+        /* > 0x140000000 */
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer) + 0),
+        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000 /*lsb*/, 0, 7),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer) + 4),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0x1 /*msb*/, 0, 5),
+
+        /* < 0x150000000 */
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer) + 0),
+        BPF_JUMP(BPF_JMP | BPF_JGT | BPF_K, 0x50000000 /*lsb*/, 3, 0),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer) + 4),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0x1 /*msb*/, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
+
+        /* Allow everything else */
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct syscall_frame *frame = amd64_thread_data()->syscall_frame;
+    struct sock_fprog prog;
+    BOOL rdr2 = FALSE;
+    NTSTATUS status;
+
+    sig_act->sa_sigaction = sigsys_handler;
+    memset(&prog, 0, sizeof(prog));
+
+    {
+        const char *sgi = getenv("SteamGameId");
+        if (sgi && (!strcmp(sgi, "1174180") || !strcmp(sgi, "1404210")))
+        {
+            /* Use specific filter and signal handler for Red Dead Redemption 2 */
+            prog.len = ARRAY_SIZE(filter_rdr2);
+            prog.filter = filter_rdr2;
+            sig_act->sa_sigaction = sigsys_handler_rdr2;
+            rdr2 = TRUE;
+        }
+    }
+
+    sigaction(SIGSYS, sig_act, NULL);
+
+    frame->syscall_flags = syscall_flags;
+    frame->syscall_table = KeServiceDescriptorTable;
+
+    if (rdr2)
+    {
+        int ret;
+
+        if ((ret = prctl(PR_GET_SECCOMP, 0, NULL, 0, 0)))
+        {
+            if (ret == 2)
+                TRACE("Seccomp filters already installed.\n");
+            else
+                ERR("Seccomp filters cannot be installed, ret %d, error %s.\n", ret, strerror(errno));
+            return;
+        }
+    }
+    else
+    {
+        if ((status = syscall(0xffff)) == STATUS_INVALID_PARAMETER)
+        {
+            TRACE("Seccomp filters already installed.\n");
+            return;
+        }
+        if (status != -ENOSYS && (status != -1 || errno != ENOSYS))
+        {
+            ERR("Unexpected status %#x, errno %d.\n", status, errno);
+            return;
+        }
+        prog.len = ARRAY_SIZE(filter);
+        prog.filter = filter;
+    }
+
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+    {
+        ERR("prctl(PR_SET_NO_NEW_PRIVS, ...): %s.\n", strerror(errno));
+        return;
+    }
+    if (sc_seccomp(SECCOMP_SET_MODE_FILTER, flags, &prog))
+    {
+        ERR("prctl(PR_SET_SECCOMP, ...): %s.\n", strerror(errno));
+        return;
+    }
+    check_bpf_jit_enable();
+#else
+    WARN("Built without seccomp.\n");
+#endif
+}
 
 /***********************************************************************
  *           handle_interrupt
@@ -2572,6 +2798,30 @@ static BOOL handle_syscall_trap( ucontext_t *sigcontext )
     return TRUE;
 }
 
+
+/**********************************************************************
+ *    segv_handler_early
+ *
+ * Handler for SIGSEGV and related errors. Used only during the initialization
+ * of the process to handle virtual faults.
+ */
+static void segv_handler_early( int signal, siginfo_t *siginfo, void *sigcontext )
+{
+    ucontext_t *ucontext = sigcontext;
+
+    switch(TRAP_sig(ucontext))
+    {
+    case TRAP_x86_PAGEFLT:  /* Page fault */
+        if (!virtual_handle_fault( siginfo->si_addr, (ERROR_sig(ucontext) >> 1) & 0x09,
+                NULL ))
+            return;
+        /* fall-through */
+    default:
+        WINE_ERR( "Got unexpected trap %lld during process initialization\n", TRAP_sig(ucontext) );
+        abort_thread(1);
+        break;
+    }
+}
 
 /**********************************************************************
  *		segv_handler
@@ -3010,6 +3260,7 @@ void signal_init_process(void)
     if (sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
     if (sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
     if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
+    install_bpf(&sig_act);
     return;
 
  error:
@@ -3017,6 +3268,29 @@ void signal_init_process(void)
     exit(1);
 }
 
+/**********************************************************************
+ *    signal_init_early
+ */
+void signal_init_early(void)
+{
+    struct sigaction sig_act;
+
+    sig_act.sa_mask = server_block_set;
+    sig_act.sa_flags = SA_RESTART | SA_SIGINFO | SA_ONSTACK;
+
+    sig_act.sa_sigaction = segv_handler_early;
+    if (sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
+    if (sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
+#ifdef SIGBUS
+    if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
+#endif
+
+    return;
+
+ error:
+    perror("sigaction");
+    exit(1);
+}
 
 /***********************************************************************
  *           call_init_thunk
@@ -3205,6 +3479,7 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
                    "leaq 0x28(%rsp),%rsi\n\t"      /* first argument */
                    "movq %rcx,%rsp\n\t"
                    "movq 0x00(%rcx),%rax\n\t"
+                   "subq $0xf000,%rax\n\t"
                    "movq 0x18(%rcx),%rdx\n\t"
                    "movl %eax,%ebx\n\t"
                    "shrl $8,%ebx\n\t"
