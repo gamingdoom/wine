@@ -89,6 +89,8 @@
 #include "winioctl.h"
 #include "winternl.h"
 #include "unix_private.h"
+#include "esync.h"
+#include "fsync.h"
 #include "wine/list.h"
 #include "wine/debug.h"
 
@@ -350,6 +352,7 @@ static void * const syscalls[] =
     NtWriteVirtualMemory,
     NtYieldExecution,
     __wine_dbg_write,
+    __wine_needs_override_large_address_aware,
     __wine_unix_call,
     __wine_unix_spawnvp,
     wine_nt_to_unix_file_name,
@@ -524,10 +527,13 @@ static const char *get_pe_dir( WORD machine )
 
 static void set_dll_path(void)
 {
-    char *p, *path = getenv( "WINEDLLPATH" );
+    char *p, *path = getenv( "WINEDLLPATH" ), *be_runtime = getenv( "PROTON_BATTLEYE_RUNTIME" );
     int i, count = 0;
 
     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
+
+    if (be_runtime)
+        count += 2;
 
     dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
     count = 0;
@@ -539,6 +545,24 @@ static void set_dll_path(void)
         path = strdup(path);
         for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" )) dll_paths[count++] = strdup( p );
         free( path );
+    }
+
+    if (be_runtime)
+    {
+        const char lib32[] = "/v1/lib/wine/";
+        const char lib64[] = "/v1/lib64/wine/";
+
+        p = malloc( strlen(be_runtime) + strlen(lib32) + 1 );
+        strcpy(p, be_runtime);
+        strcat(p, lib32);
+
+        dll_paths[count++] = p;
+
+        p = malloc( strlen(be_runtime) + strlen(lib64) + 1 );
+        strcpy(p, be_runtime);
+        strcat(p, lib64);
+
+        dll_paths[count++] = p;
     }
 
     for (i = 0; i < count; i++) dll_path_maxlen = max( dll_path_maxlen, strlen(dll_paths[i]) );
@@ -2069,6 +2093,30 @@ static struct unix_funcs unix_funcs =
 #endif
 };
 
+BOOL ac_odyssey;
+
+static void hacks_init(void)
+{
+    static const char ac_odyssey_exe[] = "ACOdyssey.exe";
+    char cur_exe[MAX_PATH];
+    DWORD cur_exe_len;
+    int fd;
+
+    fd = open("/proc/self/comm", O_RDONLY);
+    cur_exe_len = read(fd, cur_exe, sizeof(cur_exe));
+    close(fd);
+    cur_exe[cur_exe_len - 1] = 0;
+
+    if (!strcasecmp(cur_exe, ac_odyssey_exe))
+    {
+        if (do_esync() || do_fsync())
+            ERR("HACK: AC Odyssey sync tweak on.\n");
+        else
+            ERR("Not enabling AC Odyssey sync tweak as esync and fsync are disabled.\n");
+
+        ac_odyssey = TRUE;
+    }
+}
 
 /***********************************************************************
  *           start_main_thread
@@ -2084,7 +2132,11 @@ static void start_main_thread(void)
     signal_init_thread( teb );
     dbg_init();
     startup_info_size = server_init_process();
+    hacks_init();
+    fsync_init();
+    esync_init();
     virtual_map_user_shared_data();
+    virtual_map_hypervisor_shared_data();
     init_cpu_info();
     init_files();
     load_libwine();
@@ -2425,6 +2477,8 @@ void __wine_main( int argc, char *argv[], char *envp[] )
 #endif
 
     virtual_init();
+    signal_init_early();
+
     init_environment( argc, argv, envp );
 
 #ifdef __APPLE__

@@ -499,6 +499,26 @@ static const WCHAR *skip_unc_prefix( const WCHAR *ptr )
 }
 
 
+static int mwo_hack(void)
+{
+    static int mwo_hack_state = -1;
+    if (mwo_hack_state == -1)
+    {
+        WCHAR str[11];
+        SIZE_T len;
+        NTSTATUS status = RtlQueryEnvironmentVariable( NULL, L"WINE_MWO_HACK", ARRAY_SIZE(L"WINE_MWO_HACK") - 1, str, ARRAY_SIZE(str) - 1, &len );
+        if (status)
+            mwo_hack_state = 0;
+        else
+        {
+            str[len] = 0;
+            mwo_hack_state = len && atoi( str ) == 1;
+        }
+    }
+    return mwo_hack_state;
+}
+
+
 /******************************************************************
  *		get_full_path_helper
  *
@@ -512,14 +532,17 @@ static ULONG get_full_path_helper(LPCWSTR name, LPWSTR buffer, ULONG size)
     LPCWSTR                     ptr;
     const UNICODE_STRING*       cd;
     WCHAR                       tmp[4];
+    int                         mwo_hack_status;
 
     /* return error if name only consists of spaces */
     for (ptr = name; *ptr; ptr++) if (*ptr != ' ') break;
     if (!*ptr) return 0;
 
+    mwo_hack_status = mwo_hack();
+
     RtlAcquirePebLock();
 
-    if (NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
+    if (!mwo_hack_status && NtCurrentTeb()->Tib.SubSystemTib)  /* FIXME: hack */
         cd = &((WIN16_SUBSYSTEM_TIB *)NtCurrentTeb()->Tib.SubSystemTib)->curdir.DosPath;
     else
         cd = &NtCurrentTeb()->Peb->ProcessParameters->CurrentDirectory.DosPath;
