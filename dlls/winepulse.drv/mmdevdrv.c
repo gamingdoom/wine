@@ -18,15 +18,26 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#define NONAMELESSUNION
 #define COBJMACROS
+#define _GNU_SOURCE
+
+#include "config.h"
 
 #include <stdarg.h>
+#include <unistd.h>
+#include <math.h>
+#include <stdio.h>
+#include <errno.h>
 #include <assert.h>
 
 #include "windef.h"
 #include "winbase.h"
+#include "winnls.h"
+#include "winreg.h"
 #include "winternl.h"
 #include "wine/debug.h"
+#include "wine/unicode.h"
 #include "wine/list.h"
 
 #include "ole2.h"
@@ -147,7 +158,7 @@ struct ACImpl {
     AudioSessionWrapper *session_wrapper;
 };
 
-static const WCHAR defaultW[] = L"PulseAudio";
+static const WCHAR defaultW[] = {'P','u','l','s','e','a','u','d','i','o',0};
 
 static const IAudioClient3Vtbl AudioClient3_Vtbl;
 static const IAudioRenderClientVtbl AudioRenderClient_Vtbl;
@@ -236,7 +247,7 @@ static char *get_application_name(void)
     char *str;
 
     GetModuleFileNameW(NULL, path, ARRAY_SIZE(path));
-    name = wcsrchr(path, '\\');
+    name = strrchrW(path, '\\');
     if (!name)
         name = path;
     else
@@ -245,6 +256,7 @@ static char *get_application_name(void)
     if (!(str = malloc(len)))
         return NULL;
     WideCharToMultiByte(CP_UNIXCP, 0, name, -1, str, len, NULL, NULL);
+    SetEnvironmentVariableA("PULSE_PROP_application.name", str);
     return str;
 }
 
