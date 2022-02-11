@@ -58,10 +58,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(appwizcpl);
 #define GECKO_SHA "???"
 #endif
 
-#define MONO_VERSION "7.0.0"
+#define MONO_VERSION "7.1.2"
 #if defined(__i386__) || defined(__x86_64__)
 #define MONO_ARCH "x86"
-#define MONO_SHA "b37e6fc9e590e582243dc25d72a5fcc330c3a7970dfdc98a7a81d23845ba8900"
+#define MONO_SHA "710bfed60a8bb6db3f143a4387f7d0df413cc9bfea04f62cc37ecc0cbce9e640"
 #else
 #define MONO_ARCH ""
 #define MONO_SHA "???"
@@ -77,6 +77,7 @@ typedef struct {
     const char *url_config_key;
     const char *dir_config_key;
     LPCWSTR dialog_template;
+    const char *cache_dir_env_var;
 } addon_info_t;
 
 /* Download addon files over HTTP because Wine depends on an external library
@@ -90,16 +91,18 @@ static const addon_info_t addons_info[] = {
         GECKO_SHA,
         "http://source.winehq.org/winegecko.php",
         "MSHTML", "GeckoUrl", "GeckoCabDir",
-        MAKEINTRESOURCEW(ID_DWL_GECKO_DIALOG)
+        MAKEINTRESOURCEW(ID_DWL_GECKO_DIALOG),
+        "WINE_GECKO_CACHE_DIR"
     },
     {
         MONO_VERSION,
         L"wine-mono-" MONO_VERSION "-" MONO_ARCH ".msi",
         L"mono",
         MONO_SHA,
-        "http://source.winehq.org/winemono.php",
+        "https://github.com/madewokherd/wine-mono/releases/download/wine-mono-" MONO_VERSION "/wine-mono-" MONO_VERSION "-" MONO_ARCH ".msi",
         "Dotnet", "MonoUrl", "MonoCabDir",
-        MAKEINTRESOURCEW(ID_DWL_MONO_DIALOG)
+        MAKEINTRESOURCEW(ID_DWL_MONO_DIALOG),
+        "WINE_MONO_CACHE_DIR"
     }
 };
 
@@ -329,13 +332,17 @@ static enum install_res install_from_default_dir(void)
 
 static WCHAR *get_cache_file_name(BOOL ensure_exists)
 {
-    const char *xdg_dir;
+    const char *env_var = NULL, *xdg_dir;
     const WCHAR *home_dir;
     WCHAR *cache_dir, *ret;
     size_t len, size;
 
-    xdg_dir = getenv( "XDG_CACHE_HOME" );
-    if (xdg_dir && *xdg_dir && p_wine_get_dos_file_name)
+    if (addon->cache_dir_env_var && (env_var = getenv( addon->cache_dir_env_var )) && *env_var)
+    {
+        if (!p_wine_get_dos_file_name) return NULL;
+        if (!(cache_dir = p_wine_get_dos_file_name( env_var ))) return NULL;
+    }
+    else if ((xdg_dir = getenv( "XDG_CACHE_HOME" )) && *xdg_dir && p_wine_get_dos_file_name)
     {
         if (!(cache_dir = p_wine_get_dos_file_name( xdg_dir ))) return NULL;
     }
@@ -355,14 +362,17 @@ static WCHAR *get_cache_file_name(BOOL ensure_exists)
         return NULL;
     }
 
-    size = lstrlenW( cache_dir ) + ARRAY_SIZE(L"\\wine") + lstrlenW( addon->file_name ) + 1;
+    size = lstrlenW( cache_dir ) + 1 + lstrlenW( addon->file_name ) + 1;
+    if (env_var && *env_var)
+        size += ARRAY_SIZE(L"\\wine") - 1;
     if (!(ret = heap_alloc( size * sizeof(WCHAR) )))
     {
         heap_free( cache_dir );
         return NULL;
     }
     lstrcpyW( ret, cache_dir );
-    lstrcatW( ret, L"\\wine" );
+    if (env_var && *env_var)
+        lstrcatW( ret, L"\\wine" );
     heap_free( cache_dir );
 
     if (ensure_exists && !CreateDirectoryW( ret, NULL ) && GetLastError() != ERROR_ALREADY_EXISTS)

@@ -106,6 +106,8 @@ extern char *dup_fd_name( struct fd *root, const char *name );
 extern void get_nt_name( struct fd *fd, struct unicode_str *name );
 
 extern int default_fd_signaled( struct object *obj, struct wait_queue_entry *entry );
+extern int default_fd_get_esync_fd( struct object *obj, enum esync_type *type );
+extern unsigned int default_fd_get_fsync_idx( struct object *obj, enum fsync_type *type );
 extern int default_fd_get_poll_events( struct fd *fd );
 extern void default_poll_event( struct fd *fd, int event );
 extern void fd_cancel_async( struct fd *fd, struct async *async );
@@ -134,6 +136,14 @@ static inline struct fd *get_obj_fd( struct object *obj ) { return obj->ops->get
 struct timeout_user;
 extern timeout_t current_time;
 extern timeout_t monotonic_time;
+
+struct hypervisor_shared_data
+{
+    UINT64 unknown;
+    UINT64 QpcMultiplier;
+    UINT64 QpcBias;
+};
+extern struct hypervisor_shared_data *hypervisor_shared_data;
 extern struct _KUSER_SHARED_DATA *user_shared_data;
 
 #define TICKS_PER_SEC 10000000
@@ -167,6 +177,10 @@ extern void file_set_error(void);
 extern struct security_descriptor *mode_to_sd( mode_t mode, const struct sid *user, const struct sid *group );
 extern mode_t sd_to_mode( const struct security_descriptor *sd, const struct sid *owner );
 extern int is_file_executable( const char *name );
+extern int set_file_sd( struct object *obj, struct fd *fd, mode_t *mode, uid_t *uid,
+                        const struct security_descriptor *sd, unsigned int set_info );
+extern struct security_descriptor *get_file_sd( struct object *obj, struct fd *fd, mode_t *mode,
+                                                uid_t *uid );
 
 /* file mapping functions */
 
@@ -184,6 +198,8 @@ extern struct mapping *create_fd_mapping( struct object *root, const struct unic
                                           unsigned int attr, const struct security_descriptor *sd );
 extern struct object *create_user_data_mapping( struct object *root, const struct unicode_str *name,
                                                 unsigned int attr, const struct security_descriptor *sd );
+extern struct object *create_hypervisor_data_mapping( struct object *root, const struct unicode_str *name,
+                                                      unsigned int attr, const struct security_descriptor *sd );
 
 /* device functions */
 
@@ -202,7 +218,8 @@ extern struct object *create_unix_device( struct object *root, const struct unic
 
 extern void do_change_notify( int unix_fd );
 extern void sigio_callback(void);
-extern struct object *create_dir_obj( struct fd *fd, unsigned int access, mode_t mode );
+extern struct object *create_dir_obj( struct fd *fd, unsigned int access, mode_t mode,
+                                      const struct security_descriptor *sd );
 extern struct dir *get_dir_obj( struct process *process, obj_handle_t handle, unsigned int access );
 
 /* completion */
