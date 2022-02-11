@@ -28,8 +28,10 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"
+#include "winver.h"
 #include "wincontypes.h"
 #include "winternl.h"
+#include "winuser.h"
 
 #include "kernelbase.h"
 #include "wine/debug.h"
@@ -414,6 +416,54 @@ BOOL WINAPI DECLSPEC_HOTPATCH CloseHandle( HANDLE handle )
 }
 
 
+static BOOL image_needs_elevation( const WCHAR *path )
+{
+    ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION run_level;
+    BOOL ret = FALSE;
+    HANDLE handle;
+    ACTCTXW ctx;
+
+    ctx.cbSize = sizeof(ctx);
+    ctx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    ctx.lpSource = path;
+    ctx.lpResourceName = (const WCHAR *)CREATEPROCESS_MANIFEST_RESOURCE_ID;
+
+    if (RtlCreateActivationContext( &handle, &ctx )) return FALSE;
+
+    if (!RtlQueryInformationActivationContext( 0, handle, NULL, RunlevelInformationInActivationContext,
+                                               &run_level, sizeof(run_level), NULL ))
+    {
+        TRACE( "image requested run level %#x\n", run_level.RunLevel );
+        if (run_level.RunLevel == ACTCTX_RUN_LEVEL_HIGHEST_AVAILABLE
+                || run_level.RunLevel == ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
+            ret = TRUE;
+    }
+    RtlReleaseActivationContext( handle );
+
+    return ret;
+}
+
+
+static HANDLE get_elevated_token(void)
+{
+    TOKEN_ELEVATION_TYPE type;
+    TOKEN_LINKED_TOKEN linked;
+    NTSTATUS status;
+
+    if ((status = NtQueryInformationToken( GetCurrentThreadEffectiveToken(),
+                                           TokenElevationType, &type, sizeof(type), NULL )))
+        return NULL;
+
+    if (type == TokenElevationTypeFull) return NULL;
+
+    if ((status = NtQueryInformationToken( GetCurrentThreadEffectiveToken(),
+                                           TokenLinkedToken, &linked, sizeof(linked), NULL )))
+        return NULL;
+
+    return linked.LinkedToken;
+}
+
+
 /**********************************************************************
  *           CreateProcessAsUserA   (kernelbase.@)
  */
@@ -485,6 +535,197 @@ done:
     return ret;
 }
 
+static int battleye_launcher_redirect_hack(const WCHAR *app_name, WCHAR *new_name, DWORD new_name_len, WCHAR **cmd_line)
+{
+    WCHAR full_path[MAX_PATH], config_path[MAX_PATH];
+    WCHAR *p;
+    DWORD size;
+    void *block;
+    DWORD *translation;
+    char buf[100];
+    char *product_name;
+    int launcher_exe_len, game_exe_len, arg_len;
+    HANDLE launcher_cfg;
+    LARGE_INTEGER launcher_cfg_size;
+    char *configs, *config, *arch_32_exe = NULL, *arch_64_exe = NULL, *game_exe, *be_arg = NULL;
+    BOOL wow64;
+    WCHAR *new_cmd_line;
+
+    if (!GetLongPathNameW( app_name, full_path, MAX_PATH )) lstrcpynW( full_path, app_name, MAX_PATH );
+    if (!GetFullPathNameW( full_path, MAX_PATH, full_path, NULL )) lstrcpynW( full_path, app_name, MAX_PATH );
+
+    /* We detect the BattlEye launcher executable through the product name property, as the executable name varies */
+    size = GetFileVersionInfoSizeExW(0, full_path, NULL);
+    if (!size)
+        return 0;
+
+    block = HeapAlloc( GetProcessHeap(), 0, size );
+
+    if (!GetFileVersionInfoExW(0, full_path, 0, size, block))
+    {
+        HeapFree( GetProcessHeap(), 0, block );
+        return 0;
+    }
+
+    if (!VerQueryValueA(block, "\\VarFileInfo\\Translation", (void **) &translation, &size) || size != 4)
+    {
+        HeapFree( GetProcessHeap(), 0, block );
+        return 0;
+    }
+
+    sprintf(buf, "\\StringFileInfo\\%08x\\ProductName", MAKELONG(HIWORD(*translation), LOWORD(*translation)));
+
+    if (!VerQueryValueA(block, buf, (void **) &product_name, &size))
+    {
+        HeapFree( GetProcessHeap(), 0, block );
+        return 0;
+    }
+
+    if (strcmp(product_name, "BattlEye Launcher"))
+    {
+        HeapFree( GetProcessHeap(), 0, block);
+        return 0;
+    }
+
+    HeapFree( GetProcessHeap(), 0, block );
+
+    TRACE("Detected launch of a BattlEye Launcher, attempting to launch game executable instead.\n");
+
+    lstrcpyW(config_path, full_path);
+
+    for (p = config_path + wcslen(config_path); p != config_path; --p)
+        if (*p == '\\') break;
+
+    if (*p == '\\')
+    {
+        *p = 0;
+        launcher_exe_len = wcslen(p + 1);
+    }
+    else
+        launcher_exe_len = wcslen(full_path);
+
+    lstrcatW(config_path, L"\\BattlEye\\BELauncher.ini");
+
+    launcher_cfg = CreateFileW(config_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (launcher_cfg == INVALID_HANDLE_VALUE)
+        return 0;
+
+    if(!GetFileSizeEx(launcher_cfg, &launcher_cfg_size) || launcher_cfg_size.u.HighPart)
+    {
+        CloseHandle(launcher_cfg);
+        return 0;
+    }
+
+    configs = HeapAlloc( GetProcessHeap(), 0, launcher_cfg_size.u.LowPart);
+
+    if (!ReadFile(launcher_cfg, configs, launcher_cfg_size.u.LowPart, &size, NULL) || size != launcher_cfg_size.u.LowPart)
+    {
+        CloseHandle(launcher_cfg);
+        HeapFree( GetProcessHeap(), 0, configs );
+        return 0;
+    }
+
+    CloseHandle(launcher_cfg);
+
+    config = configs;
+    do
+    {
+        if (!strncmp(config, "32BitExe=", 9))
+            arch_32_exe = config + 9;
+
+        if (!strncmp(config, "64BitExe=", 9))
+            arch_64_exe = config + 9;
+
+        if (!strncmp(config, "BEArg=", 6))
+            be_arg = config + 6;
+    }
+    while ((config = strchr(config, '\n')) && *(config++));
+
+    if (arch_64_exe && (sizeof(void *) == 8 || (IsWow64Process(GetCurrentProcess(), &wow64) && wow64)))
+        game_exe = arch_64_exe;
+    else if (arch_32_exe)
+        game_exe = arch_32_exe;
+    else
+    {
+        HeapFree( GetProcessHeap(), 0, configs );
+        WARN("Failed to find game executable name from BattlEye config.\n");
+        return 0;
+    }
+
+    if (strchr(game_exe, '\r'))
+        *(strchr(game_exe, '\r')) = 0;
+    if (strchr(game_exe, '\n'))
+        *(strchr(game_exe, '\n')) = 0;
+    game_exe_len = MultiByteToWideChar(CP_ACP, 0, game_exe, -1, NULL, 0) - 1;
+
+    if (be_arg)
+    {
+        if (strchr(be_arg, '\r'))
+            *(strchr(be_arg, '\r')) = 0;
+        if (strchr(be_arg, '\n'))
+            *(strchr(be_arg, '\n')) = 0;
+        arg_len = MultiByteToWideChar(CP_ACP, 0, be_arg, -1, NULL, 0) - 1;
+    }
+
+    TRACE("Launching game executable %s for BattlEye.\n", game_exe);
+
+    if ((wcslen(app_name) - launcher_exe_len) + game_exe_len + 1 > new_name_len)
+    {
+        HeapFree( GetProcessHeap(), 0, configs );
+        WARN("Game executable path doesn't fit in buffer.\n");
+        return 0;
+    }
+
+    wcscpy(new_name, app_name);
+    p = new_name + wcslen(new_name) - launcher_exe_len;
+    MultiByteToWideChar(CP_ACP, 0, game_exe, -1, p, game_exe_len + 1);
+
+    /* find and replace executable name in command line, and add BE argument */
+    p = *cmd_line;
+    if (p[0] == '\"')
+        p++;
+
+    if (!wcsncmp(p, app_name, wcslen(app_name)))
+        p += wcslen(app_name) - launcher_exe_len;
+    else
+        p = NULL;
+
+    if (p || be_arg)
+    {
+        size = wcslen(*cmd_line) + 1;
+        if (p)
+            size += game_exe_len - launcher_exe_len;
+        if (be_arg)
+            size += 1 /* space */ + arg_len;
+        size *= sizeof(WCHAR);
+
+        /* freed by parent function */
+        new_cmd_line = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, size );
+
+        if (p)
+        {
+            lstrcpynW(new_cmd_line, *cmd_line, p - *cmd_line);
+            MultiByteToWideChar(CP_ACP, 0, game_exe, -1, new_cmd_line + wcslen(new_cmd_line), game_exe_len + 1);
+            wcscat(new_cmd_line, p + launcher_exe_len);
+        }
+        else
+        {
+            wcscpy(new_cmd_line, *cmd_line);
+        }
+
+        if (be_arg)
+        {
+            wcscat(new_cmd_line, L" ");
+            MultiByteToWideChar(CP_ACP, 0, be_arg, -1, new_cmd_line + wcslen(new_cmd_line), arg_len + 1);
+        }
+
+        *cmd_line = new_cmd_line;
+    }
+
+    HeapFree( GetProcessHeap(), 0, configs );
+    return 1;
+}
+
 /**********************************************************************
  *           CreateProcessInternalW   (kernelbase.@)
  */
@@ -500,7 +741,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
     WCHAR *p, *tidy_cmdline = cmd_line;
     RTL_USER_PROCESS_PARAMETERS *params = NULL;
     RTL_USER_PROCESS_INFORMATION rtl_info;
-    HANDLE parent = 0, debug = 0;
+    HANDLE parent = 0, debug = 0, elevated_token = NULL;
     ULONG nt_flags = 0;
     NTSTATUS status;
 
@@ -523,6 +764,14 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
     {
         if (!(tidy_cmdline = get_file_name( cmd_line, name, ARRAY_SIZE(name) ))) return FALSE;
         app_name = name;
+    }
+
+    p = tidy_cmdline;
+    if (battleye_launcher_redirect_hack( app_name, name, ARRAY_SIZE(name), &tidy_cmdline ))
+    {
+        app_name = name;
+        if (p != tidy_cmdline && p != cmd_line)
+            HeapFree( GetProcessHeap(), 0, p );
     }
 
     /* Warn if unsupported features are used */
@@ -608,6 +857,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
     if (flags & CREATE_BREAKAWAY_FROM_JOB) nt_flags |= PROCESS_CREATE_FLAGS_BREAKAWAY;
     if (flags & CREATE_SUSPENDED) nt_flags |= PROCESS_CREATE_FLAGS_SUSPENDED;
 
+    if (!token && image_needs_elevation( params->ImagePathName.Buffer ))
+        token = elevated_token = get_elevated_token();
+
     status = create_nt_process( token, debug, process_attr, thread_attr,
                                 nt_flags, params, &rtl_info, parent, handle_list, job_list );
     switch (status)
@@ -649,7 +901,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
         TRACE( "started process pid %04x tid %04x\n", info->dwProcessId, info->dwThreadId );
     }
 
- done:
+done:
+    if (elevated_token) NtClose( elevated_token );
     RtlDestroyProcessParameters( params );
     if (tidy_cmdline != cmd_line) HeapFree( GetProcessHeap(), 0, tidy_cmdline );
     return set_ntstatus( status );
