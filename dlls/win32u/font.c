@@ -1531,6 +1531,8 @@ static const WCHAR microsoft_sans_serifW[] =
     {'M','i','c','r','o','s','o','f','t',' ','S','a','n','s',' ','S','e','r','i','f',0};
 static const WCHAR tahomaW[] =
     {'T','a','h','o','m','a',0};
+static const WCHAR arialW[] =
+    {'A','r','i','a','l',0};
 static const WCHAR ms_ui_gothicW[] =
     {'M','S',' ','U','I',' ','G','o','t','h','i','c',0};
 static const WCHAR sim_sunW[] =
@@ -2736,6 +2738,7 @@ static void update_font_system_link_info(UINT current_ansi_codepage)
         set_multi_value_key(hkey, lucida_sans_unicodeW, link, len);
         set_multi_value_key(hkey, microsoft_sans_serifW, link, len);
         set_multi_value_key(hkey, tahomaW, link, len);
+        set_multi_value_key(hkey, arialW, link, len);
         NtClose( hkey );
     }
 }
