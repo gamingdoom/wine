@@ -37,6 +37,7 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
 
+struct hypervisor_shared_data *hypervisor_shared_data = (void *)0x7ffd0000;
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
 
 struct debug_info
@@ -188,6 +189,7 @@ void WINAPI RtlExitUserThread( ULONG status )
     NtQueryInformationThread( GetCurrentThread(), ThreadAmILastThread, &last, sizeof(last), NULL );
     if (last) RtlExitUserProcess( status );
     LdrShutdownThread();
+    HEAP_notify_thread_destroy(FALSE);
     for (;;) NtTerminateThread( GetCurrentThread(), status );
 }
 
@@ -231,7 +233,41 @@ void DECLSPEC_HIDDEN call_thread_func( PRTL_THREAD_START_ROUTINE entry, void *ar
     __ENDTRY
 }
 
-#else  /* __i386__ */
+#elif /* __i386__ */ defined(__x86_64__) && defined(__ASM_SEH_SUPPORTED)
+EXCEPTION_DISPOSITION WINAPI call_thread_func_handler( EXCEPTION_RECORD *rec, ULONG64 frame,
+                                                       CONTEXT *context, DISPATCHER_CONTEXT *dispatch )
+{
+    EXCEPTION_POINTERS ep = { rec, context };
+
+    WARN( "Unhandled exception, calling filter.\n" );
+
+    switch (call_unhandled_exception_filter( &ep ))
+    {
+        case EXCEPTION_CONTINUE_SEARCH:
+            return ExceptionContinueSearch;
+        case EXCEPTION_CONTINUE_EXECUTION:
+            return ExceptionContinueExecution;
+        case EXCEPTION_EXECUTE_HANDLER:
+            break;
+    }
+    NtTerminateProcess( GetCurrentProcess(), rec->ExceptionCode );
+    return ExceptionContinueExecution;
+}
+
+extern void WINAPI RtlUserThreadStart( PRTL_THREAD_START_ROUTINE entry, void *arg );
+__ASM_GLOBAL_FUNC( RtlUserThreadStart,
+                  "subq $0x28, %rsp\n\t"
+                  __ASM_SEH(".seh_stackalloc 0x28\n\t")
+                  __ASM_SEH(".seh_endprologue\n\t")
+                  "movq %rdx,%r8\n\t"
+                  "movq %rcx,%rdx\n\t"
+                  "xorq %rcx,%rcx\n\t"
+                  "movq pBaseThreadInitThunk(%rip),%r9\n\t"
+                  "call *%r9\n\t"
+                  "int3\n\t"
+                   __ASM_SEH(".seh_handler call_thread_func_handler, @except\n\t") )
+
+#else /* defined(__x86_64__) && defined(__ASM_SEH_SUPPORTED) */
 
 void WINAPI RtlUserThreadStart( PRTL_THREAD_START_ROUTINE entry, void *arg )
 {
