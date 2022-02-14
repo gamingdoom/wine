@@ -22,6 +22,7 @@
 #define __WINE_WINE_GDI_DRIVER_H
 
 #include "winternl.h"
+#include "winuser.h"
 #include "ntuser.h"
 #include "ddk/d3dkmthk.h"
 #include "wine/list.h"
@@ -319,8 +320,13 @@ struct user_driver_funcs
                                        const RECT *,struct window_surface*);
     /* system parameters */
     BOOL    (CDECL *pSystemParametersInfo)(UINT,UINT,void*,UINT);
+
     /* vulkan support */
     const struct vulkan_funcs * (CDECL *pwine_get_vulkan_driver)(UINT);
+
+    /* IME functions */
+    void    (CDECL *pUpdateCandidatePos)(HWND, const RECT *);
+
     /* thread management */
     void    (CDECL *pThreadDetach)(void);
 };
@@ -348,5 +354,23 @@ extern void CDECL __wine_set_visible_region( HDC hdc, HRGN hrgn, const RECT *vis
 extern void CDECL __wine_set_display_driver( struct user_driver_funcs *funcs, UINT version );
 extern struct opengl_funcs * CDECL __wine_get_wgl_driver( HDC hdc, UINT version );
 extern const struct vulkan_funcs * CDECL __wine_get_vulkan_driver( UINT version );
+
+/* HACK: We use some WM specific hacks in user32 and we need the user
+ * driver to export that information. */
+
+#define WINE_WM_UNKNOWN          0
+#define WINE_WM_X11_MUTTER       1
+#define WINE_WM_X11_STEAMCOMPMGR 2
+#define WINE_WM_X11_KDE          3
+
+static inline LONG_PTR __wine_get_window_manager(void)
+{
+    return (LONG_PTR)GetPropA(GetDesktopWindow(), "__wine_window_manager");
+}
+
+static inline void __wine_set_window_manager(LONG_PTR window_manager)
+{
+    SetPropA(GetDesktopWindow(), "__wine_window_manager", (HANDLE)window_manager);
+}
 
 #endif /* __WINE_WINE_GDI_DRIVER_H */
