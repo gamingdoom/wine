@@ -245,6 +245,7 @@ static char *get_application_name(void)
     if (!(str = malloc(len)))
         return NULL;
     WideCharToMultiByte(CP_UNIXCP, 0, name, -1, str, len, NULL, NULL);
+    SetEnvironmentVariableA("PULSE_PROP_application.name", str);
     return str;
 }
 
