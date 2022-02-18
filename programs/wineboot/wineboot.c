@@ -71,16 +71,20 @@
 #include <wine/svcctl.h>
 #include <wine/asm.h>
 #include <wine/debug.h>
+#include <bcrypt.h>
 
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <setupapi.h>
+#include <wininet.h>
 #include <newdev.h>
 #include "resource.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wineboot);
+
+#define TICKSPERSEC        10000000
 
 extern BOOL shutdown_close_windows( BOOL force );
 extern BOOL shutdown_all_desktops( BOOL force );
@@ -241,15 +245,276 @@ static void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)
     TRACE("XSAVE feature 2 %#x, %#x, %#x, %#x.\n", regs[0], regs[1], regs[2], regs[3]);
 }
 
+static UINT64 read_tsc_frequency(BOOL use_rdtscp)
+{
+    UINT64 freq = 0;
+
+/* FIXME: Intel provides TSC freq in some CPUID but it's been slightly broken,
+   fix it properly and test it on real Intel hardware */
+
+#if 0
+    int regs[4], cpuid_level, tmp;
+    UINT64 denom, numer;
+
+    __cpuid(regs, 0);
+    tmp = regs[2];
+    regs[2] = regs[3];
+    regs[3] = tmp;
+
+    /* only available on some intel CPUs */
+    if (memcmp(regs + 1, "GenuineIntel", 12)) freq = 0;
+    else if ((cpuid_level = regs[0]) < 0x15) freq = 0;
+    else
+    {
+        __cpuid(regs, 0x15);
+        if (!(denom = regs[0]) || !(numer = regs[1])) freq = 0;
+        else
+        {
+            if ((freq = regs[2])) freq = freq * numer / denom;
+            else if (cpuid_level >= 0x16)
+            {
+                __cpuid(regs, 0x16); /* eax is base freq in MHz */
+                freq = regs[0] * (UINT64)1000000;
+            }
+            else freq = 0;
+        }
+
+        if (!freq) WARN("Failed to read TSC frequency from CPUID, falling back to calibration.\n");
+        else TRACE("TSC frequency read from CPUID, found %I64u Hz\n", freq);
+    }
+#endif
+
+    if (freq == 0)
+    {
+        LONGLONG time0, time1, tsc0, tsc1, tsc2, tsc3, freq0, freq1, error;
+        unsigned int aux;
+        UINT retries = 50;
+        int regs[4];
+
+        do
+        {
+            if (use_rdtscp)
+            {
+                tsc0 = __rdtscp(&aux);
+                time0 = RtlGetSystemTimePrecise();
+                tsc1 = __rdtscp(&aux);
+                Sleep(1);
+                tsc2 = __rdtscp(&aux);
+                time1 = RtlGetSystemTimePrecise();
+                tsc3 = __rdtscp(&aux);
+            }
+            else
+            {
+                tsc0 = __rdtsc(); __cpuid(regs, 0);
+                time0 = RtlGetSystemTimePrecise();
+                tsc1 = __rdtsc(); __cpuid(regs, 0);
+                Sleep(1);
+                tsc2 = __rdtsc(); __cpuid(regs, 0);
+                time1 = RtlGetSystemTimePrecise();
+                tsc3 = __rdtsc(); __cpuid(regs, 0);
+            }
+
+            freq0 = (tsc2 - tsc0) * 10000000 / (time1 - time0);
+            freq1 = (tsc3 - tsc1) * 10000000 / (time1 - time0);
+            error = llabs((freq1 - freq0) * 1000000 / min(freq1, freq0));
+        }
+        while (error > 100 && retries--);
+
+        if (!retries) WARN("TSC frequency calibration failed, unstable TSC?\n");
+        else
+        {
+            freq = (freq0 + freq1) / 2;
+            TRACE("TSC frequency calibration complete, found %I64u Hz\n", freq);
+        }
+    }
+
+    return freq;
+}
+
+static BOOL is_tsc_trusted_by_the_kernel(void)
+{
+    char buf[4] = {};
+    DWORD num_read;
+    HANDLE handle;
+    BOOL ret = TRUE;
+
+    handle = CreateFileA( "\\??\\unix\\sys\\bus\\clocksource\\devices\\clocksource0\\current_clocksource",
+                          GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
+
+    if (handle == INVALID_HANDLE_VALUE)
+        return TRUE;
+
+    if (ReadFile( handle, buf, sizeof(buf)-1, &num_read, NULL ))
+    {
+        if (!!strcmp( "tsc", buf ))
+            ret = FALSE;
+    }
+
+    CloseHandle( handle );
+
+    return ret;
+}
+
+static void initialize_qpc_features(struct _KUSER_SHARED_DATA *data, UINT64 *tsc_frequency)
+{
+    int regs[4];
+
+    if (data->QpcBypassEnabled) return;
+
+    data->QpcBypassEnabled = 0;
+    data->QpcFrequency = TICKSPERSEC;
+    data->QpcShift = 0;
+    data->QpcBias = 0;
+
+    if (!data->ProcessorFeatures[PF_RDTSC_INSTRUCTION_AVAILABLE])
+    {
+        WARN("No RDTSC support, disabling QpcBypass\n");
+        return;
+    }
+
+    __cpuid(regs, 0x80000000);
+    if (regs[0] < 0x80000007)
+    {
+        WARN("Unable to check invariant TSC, disabling QpcBypass\n");
+        return;
+    }
+
+    /* check for invariant tsc bit */
+    __cpuid(regs, 0x80000007);
+    if (!(regs[3] & (1 << 8)))
+    {
+        WARN("No invariant TSC, disabling QpcBypass\n");
+        return;
+    }
+
+    if (!is_tsc_trusted_by_the_kernel())
+    {
+        WARN("TSC is not trusted by the kernel, disabling QpcBypass.\n");
+        return;
+    }
+
+    data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_ENABLED;
+
+    /* check for rdtscp support bit */
+    __cpuid(regs, 0x80000001);
+    if ((regs[3] & (1 << 27)))
+        data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_RDTSCP;
+    else if (data->ProcessorFeatures[PF_XMMI64_INSTRUCTIONS_AVAILABLE])
+        data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_LFENCE;
+    else
+        data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_MFENCE;
+
+    *tsc_frequency = read_tsc_frequency((regs[3] & (1 << 27)) != 0);
+
+    if ((data->QpcFrequency = (*tsc_frequency >> 10)))
+    {
+        data->QpcShift = 10;
+        data->QpcBias = 0;
+    }
+
+    if (!data->QpcFrequency)
+    {
+        WARN("Unable to calibrate TSC frequency, disabling QpcBypass.\n");
+        data->QpcBypassEnabled = 0;
+        data->QpcFrequency = TICKSPERSEC;
+        data->QpcShift = 0;
+        data->QpcBias = 0;
+    }
+}
+
 #else
 
 static void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)
 {
 }
 
+static void initialize_qpc_features(struct _KUSER_SHARED_DATA *data, UINT64 *tsc_frequency)
+{
+    data->QpcBypassEnabled = 0;
+    data->QpcFrequency = TICKSPERSEC;
+    data->QpcShift = 0;
+    data->QpcBias = 0;
+    *tsc_frequency = 0;
+}
+
 #endif
 
-static void create_user_shared_data(void)
+struct hypervisor_shared_data
+{
+    UINT64 unknown;
+    UINT64 QpcMultiplier;
+    UINT64 QpcBias;
+};
+
+static UINT64 muldiv_tsc(UINT64 a, UINT64 b, UINT64 c)
+{
+    UINT64 ka = a / c, ra = a % c, kb = b / c, rb = b % c;
+    return ka * kb * c + kb * ra + ka * rb + (ra * rb + c / 2) / c;
+}
+
+static void create_hypervisor_shared_data(UINT64 tsc_frequency)
+{
+    struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+    struct hypervisor_shared_data *hypervisor_shared_data;
+    OBJECT_ATTRIBUTES attr = {sizeof(attr)};
+    UNICODE_STRING name;
+    NTSTATUS status;
+    HANDLE handle;
+
+    RtlInitUnicodeString( &name, L"\\KernelObjects\\__wine_hypervisor_shared_data" );
+    InitializeObjectAttributes( &attr, &name, OBJ_OPENIF, NULL, NULL );
+    if ((status = NtOpenSection( &handle, SECTION_ALL_ACCESS, &attr )))
+    {
+        ERR( "cannot open __wine_hypervisor_shared_data: %x\n", status );
+        return;
+    }
+    hypervisor_shared_data = MapViewOfFile( handle, FILE_MAP_WRITE, 0, 0, sizeof(*hypervisor_shared_data) );
+    CloseHandle( handle );
+    if (!hypervisor_shared_data)
+    {
+        ERR( "cannot map __wine_hypervisor_shared_data\n" );
+        return;
+    }
+
+    RtlInitUnicodeString( &name, L"\\KernelObjects\\__wine_user_shared_data" );
+    InitializeObjectAttributes( &attr, &name, OBJ_OPENIF, NULL, NULL );
+    if ((status = NtOpenSection( &handle, SECTION_ALL_ACCESS, &attr )))
+    {
+        ERR( "cannot open __wine_user_shared_data: %x\n", status );
+        UnmapViewOfFile( hypervisor_shared_data );
+        return;
+    }
+    user_shared_data = MapViewOfFile( handle, FILE_MAP_WRITE, 0, 0, sizeof(*user_shared_data) );
+    CloseHandle( handle );
+    if (!user_shared_data)
+    {
+        ERR( "cannot map __wine_user_shared_data\n" );
+        UnmapViewOfFile( hypervisor_shared_data );
+        return;
+    }
+
+    hypervisor_shared_data->unknown = 0;
+    hypervisor_shared_data->QpcMultiplier = 0;
+    hypervisor_shared_data->QpcBias = 0;
+
+    if ((user_shared_data->QpcBypassEnabled & SHARED_GLOBAL_FLAGS_QPC_BYPASS_ENABLED) && tsc_frequency)
+    {
+        hypervisor_shared_data->QpcMultiplier = muldiv_tsc((UINT64)5000 << 32, (UINT64)2000 << 32, tsc_frequency);
+        user_shared_data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_HV_PAGE;
+        user_shared_data->QpcInterruptTimeIncrement = (ULONGLONG)1 << 63;
+        user_shared_data->QpcInterruptTimeIncrementShift = 1;
+        user_shared_data->QpcSystemTimeIncrement = (ULONGLONG)1 << 63;
+        user_shared_data->QpcSystemTimeIncrementShift = 1;
+        user_shared_data->QpcFrequency = 10000000;
+        user_shared_data->QpcShift = 0;
+        user_shared_data->QpcBias = 0;
+    }
+
+    UnmapViewOfFile( user_shared_data );
+    UnmapViewOfFile( hypervisor_shared_data );
+}
+
+static void create_user_shared_data(UINT64 *tsc_frequency)
 {
     struct _KUSER_SHARED_DATA *data;
     RTL_OSVERSIONINFOEXW version;
@@ -336,6 +601,7 @@ static void create_user_shared_data(void)
     data->ActiveGroupCount = 1;
 
     initialize_xstate_features( data );
+    initialize_qpc_features( data, tsc_frequency );
 
     UnmapViewOfFile( data );
 }
@@ -647,7 +913,7 @@ done:
 }
 
 /* create the volatile hardware registry keys */
-static void create_hardware_registry_keys(void)
+static void create_hardware_registry_keys(UINT64 tsc_frequency)
 {
     unsigned int i;
     HKEY hkey, system_key, cpu_key, fpu_key;
@@ -722,12 +988,15 @@ static void create_hardware_registry_keys(void)
         if (!RegCreateKeyExW( cpu_key, numW, 0, NULL, REG_OPTION_VOLATILE,
                               KEY_ALL_ACCESS, NULL, &hkey, NULL ))
         {
+            DWORD tsc_freq_mhz = (DWORD)(tsc_frequency / 1000000ull); /* Hz -> Mhz */
+            if (!tsc_freq_mhz) tsc_freq_mhz = power_info[i].MaxMhz;
+
             RegSetValueExW( hkey, L"FeatureSet", 0, REG_DWORD, (BYTE *)&sci.ProcessorFeatureBits, sizeof(DWORD) );
             set_reg_value( hkey, L"Identifier", id );
             /* TODO: report ARM properly */
             set_reg_value( hkey, L"ProcessorNameString", namestr );
             set_reg_value( hkey, L"VendorIdentifier", vendorid );
-            RegSetValueExW( hkey, L"~MHz", 0, REG_DWORD, (BYTE *)&power_info[i].MaxMhz, sizeof(DWORD) );
+            RegSetValueExW( hkey, L"~MHz", 0, REG_DWORD, (BYTE *)&tsc_freq_mhz, sizeof(DWORD) );
             RegCloseKey( hkey );
         }
         if (sci.ProcessorArchitecture != PROCESSOR_ARCHITECTURE_ARM &&
@@ -748,16 +1017,274 @@ static void create_hardware_registry_keys(void)
     HeapFree( GetProcessHeap(), 0, power_info );
 }
 
+struct dyndata_enum_key{
+    WCHAR id[9];
+    WCHAR hardwarekey[64];
+    char  problem[4];
+    char  status[4];
+    char  allocation[12];
+    char  child[4];
+    char  sibling[4];
+    char  parent[4];
+};
+
+static struct dyndata_enum_key predefined_enums[] =
+{
+    {
+        {'C','2','9','A','2','3','D','0',0},
+        {'H','T','R','E','E','\\','R','O','O','T','\\','0',0},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x4e, 0x08, 0x08, 0x1a},
+        {0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0x40, 0x5a, 0x9a, 0xc2},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x00}
+    },
+    {
+        {'C','2','9','A','5','A','4','0',0},
+        {'H','T','R','E','E','\\','R','E','S','E','R','V','E','D','\\','0',0},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x4e, 0x08, 0x08, 0x18},
+        {0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x60, 0x5c, 0x9a, 0xc2},
+        {0xd0, 0x23, 0x9a, 0xc2}
+    },
+    {
+        {'C','2','9','A','5','C','6','0',0},
+        {'R','O','O','T','\\','N','E','T','\\','0','0','0','0',0},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x4f, 0x6a, 0x08, 0x18},
+        {0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0xf0, 0x93, 0x9b, 0xc2},
+        {0xc0, 0x5d, 0x9a, 0xc2},
+        {0xd0, 0x23, 0x9a, 0xc2}
+    },
+    {
+        {'C','2','9','A','5','D','C','0',0},
+        {'R','O','O','T','\\','P','R','O','C','E','S','S','O','R','_','U','P','D','A','T','E','\\','0','0','0','0',0},
+        {0x00, 0x00, 0x00, 0x00},
+        {0xcf, 0x6a, 0x88, 0x19},
+        {0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x20, 0x5f, 0x9a, 0xc2},
+        {0xd0, 0x23, 0x9a, 0xc2}
+    },
+    {
+        {'C','2','9','A','5','F','2','0',0},
+        {'R','O','O','T','\\','S','W','E','N','U','M','\\','0','0','0','0',0},
+        {0x00, 0x00, 0x00, 0x00},
+        {0xcf, 0x6a, 0x88, 0x19},
+        {0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+        {0x00, 0x00, 0x00, 0x00},
+        {0x20, 0x5f, 0x9a, 0xc2},
+        {0xd0, 0x23, 0x9a, 0xc2}
+    }
+};
+
+/* add entry to HKEY_DYN_DATA\Config Manager\Enum */
+static void add_dynamic_enum_keys(HKEY key, struct dyndata_enum_key *entry)
+{
+    static const WCHAR HardWareKeyW[] = {'H','a','r','d','W','a','r','e','K','e','y',0};
+    static const WCHAR ProblemW[]     = {'P','r','o','b','l','e','m',0};
+    static const WCHAR StatusW[]      = {'S','t','a','t','u','s',0};
+    static const WCHAR AllocationW[]  = {'A','l','l','o','c','a','t','i','o','n',0};
+    static const WCHAR ChildW[]       = {'C','h','i','l','d',0};
+    static const WCHAR SiblingW[]     = {'S','i','b','l','i','n','g',0};
+    static const WCHAR ParentW[]      = {'P','a','r','e','n','t',0};
+
+    HKEY subkey;
+
+    if (!entry)
+        return;
+
+    if (RegCreateKeyExW( key, entry->id, 0, NULL, 0, KEY_WRITE, NULL, &subkey, NULL ))
+        return;
+
+    set_reg_value( subkey, HardWareKeyW, entry->hardwarekey );
+    RegSetValueExW( subkey, ProblemW,    0, REG_BINARY, (const BYTE *)entry->problem,    sizeof(entry->problem) );
+    RegSetValueExW( subkey, StatusW,     0, REG_BINARY, (const BYTE *)entry->status,     sizeof(entry->status) );
+    RegSetValueExW( subkey, AllocationW, 0, REG_BINARY, (const BYTE *)entry->allocation, sizeof(entry->allocation) );
+    RegSetValueExW( subkey, ChildW,      0, REG_BINARY, (const BYTE *)entry->child,      sizeof(entry->child) );
+    RegSetValueExW( subkey, SiblingW,    0, REG_BINARY, (const BYTE *)entry->sibling,    sizeof(entry->sibling) );
+    RegSetValueExW( subkey, ParentW,     0, REG_BINARY, (const BYTE *)entry->parent,     sizeof(entry->parent) );
+
+    RegCloseKey( subkey );
+}
+
+static unsigned char decodehex( char c )
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    else if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    else if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    return 0xFF;
+}
+
+static void get_machineid( BYTE *buf )
+{
+    static const char sd_machineid_path[] = "\\??\\unix\\/etc/machine-id";
+    static const char dbus_machineid_path[] = "\\??\\unix\\/var/lib/dbus/machine-id";
+    HANDLE file;
+    char buffer[34];
+    BOOL status;
+    DWORD bytes_read;
+    int i;
+
+    file = CreateFileA( sd_machineid_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL );
+    if (file == INVALID_HANDLE_VALUE)
+        file = CreateFileA( dbus_machineid_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL );
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        WARN( "Could not open machine id file: error %d\n", GetLastError() );
+        goto error;
+    }
+
+    status = ReadFile( file, buffer, 34, &bytes_read, NULL );
+    CloseHandle( file );
+    if (!status)
+    {
+        WARN( "Could not read machine id file: error %d\n", GetLastError() );
+        goto error;
+    }
+
+    if (!(bytes_read == 32 || (bytes_read == 33 && buffer[32] == '\n')))
+    {
+        WARN( "Wrong machine id file size: %d != 32 or 33\n", bytes_read );
+        goto error;
+    }
+
+    for (i = 0; i < 16; i++)
+    {
+        unsigned char high_nibble, low_nibble;
+
+        high_nibble = decodehex( buffer[i * 2] );
+        low_nibble = decodehex( buffer[i * 2 + 1] );
+        if (high_nibble == 0xFF || low_nibble == 0xFF)
+        {
+            WARN( "Failed to decode machine id byte %d\n", i );
+            goto error;
+        }
+        buf[i] = (high_nibble << 4) | low_nibble;
+    }
+
+    return;
+error:
+    RtlZeroMemory( buf, 16 );
+}
+
+#define MACHINEID_HASH_SALT "WINESALT"
+#define MACHINEID_HASH_SALT_SIZE (sizeof(MACHINEID_HASH_SALT) - 1)
+#define MACHINEID_HASH_ALG BCRYPT_SHA1_ALGORITHM
+#define MACHINEID_HASH_ALG_SIZE 20
+
+static void get_hashed_machineid( BYTE *buf )
+{
+    BYTE input[16 + MACHINEID_HASH_SALT_SIZE];
+    BCRYPT_ALG_HANDLE alg;
+    NTSTATUS status;
+    BYTE hash[MACHINEID_HASH_ALG_SIZE];
+    int i;
+
+    get_machineid( input );
+    RtlCopyMemory( &input[sizeof(input) - MACHINEID_HASH_SALT_SIZE], MACHINEID_HASH_SALT, MACHINEID_HASH_SALT_SIZE );
+
+    if (!NT_SUCCESS(status = BCryptOpenAlgorithmProvider( &alg, MACHINEID_HASH_ALG, NULL, 0 )))
+    {
+        WARN( "Couldn't open crypto provider for machine id hashing: error %u\n", status );
+        goto error;
+    }
+
+    status = BCryptHash( alg, NULL, 0, input, sizeof(input), hash, sizeof(hash) );
+    BCryptCloseAlgorithmProvider( alg, 0 );
+    if (!NT_SUCCESS(status))
+    {
+        WARN( "Couldn't hash machine id: error %u\n", status );
+        goto error;
+    }
+
+    for (i = 8; i < ARRAY_SIZE(hash); i++)
+        hash[i % 8] ^= hash[i];
+
+    RtlCopyMemory( buf, hash, 8 );
+    return;
+error:
+    RtlZeroMemory( buf, 8 );
+}
+
+static void get_productid( WCHAR *buf )
+{
+    BYTE machineid[8];
+    DWORD mid_lodword, mid_hidword;
+    unsigned int c, e;
+    unsigned int tmp, check_digit;
+
+    /* get hashed machine id */
+    get_hashed_machineid( machineid );
+
+    /* compute C and E values from hashed machine id */
+    mid_lodword = (machineid[3] << 24U) | (machineid[2] << 16U) | (machineid[1] << 8U) | machineid[0];
+    mid_hidword = (machineid[7] << 24U) | (machineid[6] << 16U) | (machineid[5] << 8U) | machineid[4];
+    c = (unsigned int)(mid_lodword * 999999ULL / 0xFFFFFFFF);
+    e = (unsigned int)(mid_hidword *    999ULL / 0xFFFFFFFF);
+
+    /* compute check digit for C value */
+    tmp = c;
+    check_digit = tmp % 10;
+    tmp = tmp / 10;
+    check_digit += tmp % 10;
+    tmp = tmp / 10;
+    check_digit += tmp % 10;
+    tmp = tmp / 10;
+    check_digit += tmp % 10;
+    tmp = tmp / 10;
+    check_digit += tmp % 10;
+    tmp = tmp / 10;
+    check_digit += tmp;
+    check_digit = 7 - check_digit % 7;
+
+    /* create product id from parts */
+    swprintf( buf, 24, L"12345-OEM-%06u%u-00%03u", c, check_digit, e );
+}
+
+/* create the volatile software registry keys */
+static void create_software_registry_keys(void)
+{
+    WCHAR productid[24];
+    HKEY cv_key;
+
+    get_productid( productid );
+
+    if (!RegCreateKeyW( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion", &cv_key ))
+    {
+        set_reg_value( cv_key, L"ProductId", productid );
+        RegCloseKey( cv_key );
+    }
+
+    if (!RegCreateKeyW( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows\\CurrentVersion", &cv_key ))
+    {
+        set_reg_value( cv_key, L"ProductId", productid );
+        RegCloseKey( cv_key );
+    }
+}
 
 /* create the DynData registry keys */
 static void create_dynamic_registry_keys(void)
 {
     HKEY key;
+    int entry;
 
     if (!RegCreateKeyExW( HKEY_DYN_DATA, L"PerfStats\\StatData", 0, NULL, 0, KEY_WRITE, NULL, &key, NULL ))
         RegCloseKey( key );
     if (!RegCreateKeyExW( HKEY_DYN_DATA, L"Config Manager\\Enum", 0, NULL, 0, KEY_WRITE, NULL, &key, NULL ))
+    {
+        for (entry = 0; entry < sizeof(predefined_enums) / sizeof(predefined_enums[0]); entry++)
+            add_dynamic_enum_keys( key, &predefined_enums[entry] );
+
         RegCloseKey( key );
+    }
 }
 
 /* create the platform-specific environment registry keys */
@@ -900,6 +1427,13 @@ static void create_volatile_environment_registry_key(void)
 
     set_reg_value( hkey, L"SESSIONNAME", L"Console" );
     RegCloseKey( hkey );
+}
+
+static void create_proxy_settings(void)
+{
+    HINTERNET inet;
+    inet = InternetOpenA( "Wine", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0 );
+    if (inet) InternetCloseHandle( inet );
 }
 
 /* Performs the rename operations dictated in %SystemRoot%\Wininit.ini.
@@ -1444,6 +1978,43 @@ static void update_user_profile(void)
     LocalFree(sid);
 }
 
+static void update_win_version(void)
+{
+    static const WCHAR win10_buildW[] = L"19043";
+
+    HKEY cv_h;
+    DWORD type, sz;
+    WCHAR current_version[256];
+
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion",
+                0, KEY_ALL_ACCESS, &cv_h) == ERROR_SUCCESS){
+        /* get the current windows version */
+        sz = sizeof(current_version);
+        if(RegQueryValueExW(cv_h, L"CurrentVersion", NULL, &type, (BYTE *)current_version, &sz) == ERROR_SUCCESS &&
+                type == REG_SZ){
+            if(!wcscmp(current_version, L"10.0")){
+                RegSetValueExW(cv_h, L"CurrentBuild", 0, REG_SZ, (const BYTE *)win10_buildW, sizeof(win10_buildW));
+                RegSetValueExW(cv_h, L"CurrentBuildNumber", 0, REG_SZ, (const BYTE *)win10_buildW, sizeof(win10_buildW));
+            }
+        }
+        RegCloseKey(cv_h);
+    }
+
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wow6432Node\\Microsoft\\Windows NT\\CurrentVersion",
+                0, KEY_ALL_ACCESS, &cv_h) == ERROR_SUCCESS){
+        /* get the current windows version */
+        sz = sizeof(current_version);
+        if(RegQueryValueExW(cv_h, L"CurrentVersion", NULL, &type, (BYTE *)current_version, &sz) == ERROR_SUCCESS &&
+                type == REG_SZ){
+            if(!wcscmp(current_version, L"10.0")){
+                RegSetValueExW(cv_h, L"CurrentBuild", 0, REG_SZ, (const BYTE *)win10_buildW, sizeof(win10_buildW));
+                RegSetValueExW(cv_h, L"CurrentBuildNumber", 0, REG_SZ, (const BYTE *)win10_buildW, sizeof(win10_buildW));
+            }
+        }
+        RegCloseKey(cv_h);
+    }
+}
+
 /* execute rundll32 on the wine.inf file if necessary */
 static void update_wineprefix( BOOL force )
 {
@@ -1499,6 +2070,7 @@ static void update_wineprefix( BOOL force )
         }
         install_root_pnp_devices();
         update_user_profile();
+        update_win_version();
 
         WINE_MESSAGE( "wine: configuration in %s has been updated.\n", debugstr_w(prettyprint_configdir()) );
     }
@@ -1607,6 +2179,7 @@ int __cdecl main( int argc, char *argv[] )
     BOOL end_session, force, init, kill, restart, shutdown, update;
     HANDLE event;
     OBJECT_ATTRIBUTES attr;
+    UINT64 tsc_frequency = 0;
     UNICODE_STRING nameW;
     BOOL is_wow64;
 
@@ -1693,8 +2266,10 @@ int __cdecl main( int argc, char *argv[] )
 
     ResetEvent( event );  /* in case this is a restart */
 
-    create_user_shared_data();
-    create_hardware_registry_keys();
+    create_user_shared_data(&tsc_frequency);
+    create_hypervisor_shared_data(tsc_frequency);
+    create_hardware_registry_keys(tsc_frequency);
+    create_software_registry_keys();
     create_dynamic_registry_keys();
     create_environment_registry_keys();
     create_computer_name_keys();
@@ -1712,6 +2287,7 @@ int __cdecl main( int argc, char *argv[] )
     if (init || update) update_wineprefix( update );
 
     create_volatile_environment_registry_key();
+    create_proxy_settings();
 
     ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunOnce", TRUE, TRUE );
 
