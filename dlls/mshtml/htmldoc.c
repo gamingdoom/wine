@@ -5951,14 +5951,113 @@ static dispex_static_data_t HTMLDocumentObj_dispex = {
     HTMLDocumentObj_iface_tids
 };
 
+/* TRUE if we create a dedicated thread for all HTML documents */
+static BOOL gecko_main_thread_config;
+
+static LONG gecko_main_thread;
+static HWND gecko_main_thread_hwnd;
+static HANDLE gecko_main_thread_event;
+
+static DWORD WINAPI gecko_main_thread_proc(void *arg)
+{
+    MSG msg;
+
+    TRACE("\n");
+
+    CoInitialize(NULL);
+
+    gecko_main_thread_hwnd = get_thread_hwnd();
+    if(!gecko_main_thread_hwnd) {
+        ERR("Could not create thread window\n");
+        SetEvent(gecko_main_thread_event);
+        CoUninitialize();
+        return 0;
+    }
+
+    gecko_main_thread = GetCurrentThreadId();
+    SetEvent(gecko_main_thread_event);
+
+    while(GetMessageW(&msg, NULL, 0, 0)) {
+        DispatchMessageW(&msg);
+        TranslateMessage(&msg);
+    }
+
+    CoUninitialize();
+    return 0;
+}
+
+static BOOL WINAPI read_thread_config(INIT_ONCE *once, void *param, void **context)
+{
+    char buffer[MAX_PATH * 2], buffer2[MAX_PATH * 2];
+    DWORD len;
+    HKEY key;
+
+    len = GetModuleFileNameA(0, buffer, MAX_PATH);
+    if (len && len < MAX_PATH)
+    {
+        char *p, *appname = buffer;
+
+        if ((p = strrchr(appname, '/')))
+            appname = p + 1;
+
+        if ((p = strrchr(appname, '\\')))
+            appname = p + 1;
+
+        strcat(appname, "\\MSHTML\\MainThreadHack");
+        strcpy(buffer2, "Software\\Wine\\AppDefaults\\");
+        strcat(buffer2, appname);
+
+        if (!RegOpenKeyA(HKEY_CURRENT_USER, buffer2, &key))
+        {
+            RegCloseKey(key);
+            FIXME("CXHACK: Using separated main thread.\n");
+            gecko_main_thread_config = TRUE;
+        }
+    }
+
+    return TRUE;
+}
+
 static HRESULT create_document_object(BOOL is_mhtml, IUnknown *outer, REFIID riid, void **ppv)
 {
     HTMLDocumentObj *doc;
     HRESULT hres;
 
+    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+
     if(outer && !IsEqualGUID(&IID_IUnknown, riid)) {
         *ppv = NULL;
         return E_INVALIDARG;
+    }
+
+    /* CXHACK 15579 */
+    InitOnceExecuteOnce(&init_once, read_thread_config, NULL, NULL);
+    if(gecko_main_thread_config && !gecko_main_thread) {
+        HANDLE thread, event;
+
+        event = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if(InterlockedCompareExchangePointer(&gecko_main_thread_event, event, NULL))
+            CloseHandle(event);
+
+        thread = CreateThread(NULL, 0, gecko_main_thread_proc, NULL, 0, NULL);
+        if(thread) {
+            WaitForSingleObject(gecko_main_thread_event, INFINITE);
+            CloseHandle(thread);
+        }else {
+            ERR("Could not create a thread\n");
+        }
+    }
+
+    if(!gecko_main_thread) {
+        gecko_main_thread = GetCurrentThreadId();
+        gecko_main_thread_hwnd = get_thread_hwnd();
+    }else if(GetCurrentThreadId() != gecko_main_thread) {
+        FIXME("CXHACK: Creating HTMLDocument outside Gecko main thread\n");
+        if(!gecko_main_thread_config) {
+            FIXME("CXHACK: Dedicated main thread not configured\n");
+            FIXME("CXHACK: Create HKCU\\Software\\Wine\\AppDefaults\\<app>\\MSHTML\\MainThreadHack key\n");
+        }
+        return create_marshaled_doc(gecko_main_thread_hwnd, riid, ppv);
     }
 
     /* ensure that security manager is initialized */
