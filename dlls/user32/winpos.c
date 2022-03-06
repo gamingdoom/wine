@@ -1139,8 +1139,8 @@ static BOOL show_window( HWND hwnd, INT cmd )
     }
     swp = new_swp;
 
-    parent = GetAncestor( hwnd, GA_PARENT );
-    if (parent && !IsWindowVisible( parent ) && !(swp & SWP_STATECHANGED))
+    if ((style & WS_CHILD) && (parent = GetAncestor( hwnd, GA_PARENT )) &&
+        !IsWindowVisible( parent ) && !(swp & SWP_STATECHANGED))
     {
         /* if parent is not visible simply toggle WS_VISIBLE and return */
         if (showFlag) WIN_SetStyle( hwnd, WS_VISIBLE, 0 );
@@ -1663,8 +1663,16 @@ LONG WINPOS_HandleWindowPosChanging( HWND hwnd, WINDOWPOS *winpos )
     if ((style & WS_THICKFRAME) || ((style & (WS_POPUP | WS_CHILD)) == 0))
     {
 	MINMAXINFO info = WINPOS_GetMinMaxInfo( hwnd );
-        winpos->cx = min( winpos->cx, info.ptMaxTrackSize.x );
-        winpos->cy = min( winpos->cy, info.ptMaxTrackSize.y );
+
+        /* HACK: This code changes the window's size to fit the display. However,
+         * some games (Bayonetta, Dragon's Dogma) will then have the incorrect
+         * render size. So just let windows be too big to fit the display. */
+        if (__wine_get_window_manager() != WINE_WM_X11_STEAMCOMPMGR)
+        {
+            winpos->cx = min( winpos->cx, info.ptMaxTrackSize.x );
+            winpos->cy = min( winpos->cy, info.ptMaxTrackSize.y );
+        }
+
 	if (!(style & WS_MINIMIZE))
 	{
             winpos->cx = max( winpos->cx, info.ptMinTrackSize.x );
@@ -2037,8 +2045,11 @@ static BOOL fixup_flags( WINDOWPOS *winpos, const RECT *old_window_rect, int par
     if (winpos->cy < 0) winpos->cy = 0;
     else if (winpos->cy > 32767) winpos->cy = 32767;
 
-    parent = GetAncestor( winpos->hwnd, GA_PARENT );
-    if (!IsWindowVisible( parent )) winpos->flags |= SWP_NOREDRAW;
+    if (wndPtr->dwStyle & WS_CHILD)
+    {
+        parent = GetAncestor( winpos->hwnd, GA_PARENT );
+        if (!IsWindowVisible( parent )) winpos->flags |= SWP_NOREDRAW;
+    }
 
     if (wndPtr->dwStyle & WS_VISIBLE) winpos->flags &= ~SWP_SHOWWINDOW;
     else
