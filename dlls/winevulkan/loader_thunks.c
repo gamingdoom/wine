@@ -19,7 +19,7 @@ VkResult WINAPI vkAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImage
     params.device = device;
     params.pAcquireInfo = pAcquireInfo;
     params.pImageIndex = pImageIndex;
-    return vk_unix_call(unix_vkAcquireNextImage2KHR, &params);
+    return unix_funcs->p_vk_call(unix_vkAcquireNextImage2KHR, &params);
 }
 
 VkResult WINAPI vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t *pImageIndex)
@@ -31,7 +31,7 @@ VkResult WINAPI vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain,
     params.semaphore = semaphore;
     params.fence = fence;
     params.pImageIndex = pImageIndex;
-    return vk_unix_call(unix_vkAcquireNextImageKHR, &params);
+    return unix_funcs->p_vk_call(unix_vkAcquireNextImageKHR, &params);
 }
 
 VkResult WINAPI vkAcquirePerformanceConfigurationINTEL(VkDevice device, const VkPerformanceConfigurationAcquireInfoINTEL *pAcquireInfo, VkPerformanceConfigurationINTEL *pConfiguration)
@@ -3460,14 +3460,6 @@ VkResult WINAPI vkGetPhysicalDevicePresentRectanglesKHR(VkPhysicalDevice physica
     params.pRectCount = pRectCount;
     params.pRects = pRects;
     return unix_funcs->p_vk_call(unix_vkGetPhysicalDevicePresentRectanglesKHR, &params);
-}
-
-void WINAPI vkGetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice, VkPhysicalDeviceProperties *pProperties)
-{
-    struct vkGetPhysicalDeviceProperties_params params;
-    params.physicalDevice = physicalDevice;
-    params.pProperties = pProperties;
-    vk_unix_call(unix_vkGetPhysicalDeviceProperties, &params);
 }
 
 void WINAPI vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR(VkPhysicalDevice physicalDevice, const VkQueryPoolPerformanceCreateInfoKHR *pPerformanceQueryCreateInfo, uint32_t *pNumPasses)
