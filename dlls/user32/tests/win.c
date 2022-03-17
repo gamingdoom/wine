@@ -88,8 +88,8 @@ static void dump_minmax_info( const MINMAXINFO *minmax )
 static void flush_events( BOOL remove_messages )
 {
     MSG msg;
-    int diff = 200;
-    int min_timeout = 100;
+    int diff = 500;
+    int min_timeout = 200;
     DWORD time = GetTickCount() + diff;
 
     while (diff > 0)
@@ -98,7 +98,6 @@ static void flush_events( BOOL remove_messages )
         if (remove_messages)
             while (PeekMessageA( &msg, 0, 0, 0, PM_REMOVE )) DispatchMessageA( &msg );
         diff = time - GetTickCount();
-        min_timeout = 50;
     }
 }
 
@@ -5156,15 +5155,65 @@ static void test_window_styles(void)
     }
 }
 
+static HWND root_dialog(HWND hwnd)
+{
+    while ((GetWindowLongA(hwnd, GWL_EXSTYLE) & WS_EX_CONTROLPARENT) &&
+           (GetWindowLongA(hwnd, GWL_STYLE) & (WS_CHILD|WS_POPUP)) == WS_CHILD)
+    {
+        HWND parent = GetParent(hwnd);
+
+        /* simple detector for a window being a dialog */
+        if (!DefDlgProcA(parent, DM_GETDEFID, 0, 0))
+            break;
+
+        hwnd = parent;
+
+        if (!(GetWindowLongA(hwnd, GWL_STYLE) & DS_CONTROL))
+            break;
+    }
+
+    return hwnd;
+}
+
 static INT_PTR WINAPI empty_dlg_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     return 0;
 }
 
+static LRESULT expected_id;
+
 static INT_PTR WINAPI empty_dlg_proc3(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     if (msg == WM_INITDIALOG)
+    {
+        HWND parent = GetParent(hwnd);
+        LRESULT id, ret;
+
+        id = DefDlgProcA(parent, DM_GETDEFID, 0, 0);
+        if (!id || root_dialog(hwnd) == hwnd)
+            parent = 0;
+
+        id = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
+        if (!parent)
+            ok(id == MAKELONG(IDOK,DC_HASDEFID), "expected (IDOK,DC_HASDEFID), got %08lx\n", id);
+        else
+            ok(id == expected_id, "expected %08lx, got %08lx\n", expected_id, id);
+
+        ret = DefDlgProcA(hwnd, DM_SETDEFID, 0x3333, 0);
+        ok(ret, "DefDlgProc(DM_SETDEFID) failed\n");
+        id = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
+        ok(id == MAKELONG(0x3333,DC_HASDEFID), "expected (0x3333,DC_HASDEFID), got %08lx\n", id);
+
+        if (parent)
+        {
+            id = DefDlgProcA(parent, DM_GETDEFID, 0, 0);
+            ok(id == MAKELONG(0x3333,DC_HASDEFID), "expected (0x3333,DC_HASDEFID), got %08lx\n", id);
+
+            expected_id = MAKELONG(0x3333,DC_HASDEFID);
+        }
+
         EndDialog(hwnd, 0);
+    }
 
     return 0;
 }
@@ -5183,6 +5232,16 @@ static INT_PTR WINAPI empty_dlg_proc2(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         struct dialog_param *param = (struct dialog_param *)lparam;
         BOOL parent_is_child;
         HWND disabled_hwnd;
+        LRESULT id, ret;
+
+        id = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
+        ok(id == MAKELONG(IDOK,DC_HASDEFID), "expected (IDOK,DC_HASDEFID), got %08lx\n", id);
+        ret = DefDlgProcA(hwnd, DM_SETDEFID, 0x2222, 0);
+        ok(ret, "DefDlgProc(DM_SETDEFID) failed\n");
+        id = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
+        ok(id == MAKELONG(0x2222,DC_HASDEFID), "expected (0x2222,DC_HASDEFID), got %08lx\n", id);
+
+        expected_id = MAKELONG(0x2222,DC_HASDEFID);
 
         parent_is_child = (GetWindowLongA(param->parent, GWL_STYLE) & (WS_POPUP | WS_CHILD)) == WS_CHILD;
 
@@ -5224,6 +5283,25 @@ static INT_PTR WINAPI empty_dlg_proc2(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         DialogBoxIndirectParamA(GetModuleHandleA(NULL), param->dlg_data, hwnd, empty_dlg_proc3, 0);
         ok(IsWindowEnabled(hwnd), "wrong state for %p (%08x)\n", hwnd, style);
 
+        param->dlg_data->style |= DS_CONTROL;
+        DialogBoxIndirectParamA(GetModuleHandleA(NULL), param->dlg_data, hwnd, empty_dlg_proc3, 0);
+        ok(IsWindowEnabled(hwnd), "wrong state for %p (%08x)\n", hwnd, style);
+
+        param->dlg_data->dwExtendedStyle |= WS_EX_CONTROLPARENT;
+        SetWindowLongA(hwnd, GWL_EXSTYLE, GetWindowLongA(hwnd, GWL_EXSTYLE) | WS_EX_CONTROLPARENT);
+        SetWindowLongA(hwnd, GWL_STYLE, style & ~DS_CONTROL);
+        param->dlg_data->style &= ~DS_CONTROL;
+        DialogBoxIndirectParamA(GetModuleHandleA(NULL), param->dlg_data, hwnd, empty_dlg_proc3, 0);
+        ok(IsWindowEnabled(hwnd), "wrong state for %p (%08x)\n", hwnd, style);
+
+        SetWindowLongA(hwnd, GWL_STYLE, style | DS_CONTROL);
+        DialogBoxIndirectParamA(GetModuleHandleA(NULL), param->dlg_data, hwnd, empty_dlg_proc3, 0);
+        ok(IsWindowEnabled(hwnd), "wrong state for %p (%08x)\n", hwnd, style);
+
+        param->dlg_data->style |= DS_CONTROL;
+        DialogBoxIndirectParamA(GetModuleHandleA(NULL), param->dlg_data, hwnd, empty_dlg_proc3, 0);
+        ok(IsWindowEnabled(hwnd), "wrong state for %p (%08x)\n", hwnd, style);
+
         EndDialog(hwnd, 0);
     }
     return 0;
@@ -5242,6 +5320,7 @@ static void check_dialog_style(DWORD style_in, DWORD ex_style_in, DWORD style_ou
     DWORD style, ex_style;
     HWND hwnd, grand_parent = 0, parent = 0;
     struct dialog_param param;
+    LRESULT id, ret;
 
     if (style_in & WS_CHILD)
     {
@@ -5268,6 +5347,13 @@ static void check_dialog_style(DWORD style_in, DWORD ex_style_in, DWORD style_ou
 
     hwnd = CreateDialogIndirectParamA(GetModuleHandleA(NULL), &dlg_data.dt, parent, empty_dlg_proc, 0);
     ok(hwnd != 0, "dialog creation failed, style %#x, exstyle %#x\n", style_in, ex_style_in);
+
+    id = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
+    ok(id == MAKELONG(IDOK,DC_HASDEFID), "expected (IDOK,DC_HASDEFID), got %08lx\n", id);
+    ret = DefDlgProcA(hwnd, DM_SETDEFID, 0x1111, 0);
+    ok(ret, "DefDlgProc(DM_SETDEFID) failed\n");
+    id = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
+    ok(id == MAKELONG(0x1111,DC_HASDEFID), "expected (0x1111,DC_HASDEFID), got %08lx\n", id);
 
     flush_events( TRUE );
 
@@ -9118,6 +9204,29 @@ static LRESULT CALLBACK fullscreen_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPAR
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
+struct monitor_info
+{
+    RECT first_monitor;
+    RECT second_monitor;
+};
+
+static BOOL CALLBACK enum_monitor_cb(HMONITOR monitor, HDC hdc, RECT *monitor_rect, LPARAM lparam)
+{
+    struct monitor_info *info = (struct monitor_info *)lparam;
+
+    if (IsRectEmpty(&info->first_monitor))
+    {
+        info->first_monitor = *monitor_rect;
+    }
+    else
+    {
+        info->second_monitor = *monitor_rect;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static void test_fullscreen(void)
 {
     static const DWORD t_style[] = {
@@ -9126,6 +9235,7 @@ static void test_fullscreen(void)
     static const DWORD t_ex_style[] = {
         0, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW
     };
+    struct monitor_info monitor_info;
     WNDCLASSA cls;
     int timeout;
     HWND hwnd;
@@ -9278,6 +9388,52 @@ static void test_fullscreen(void)
     DestroyWindow(hwnd);
 
     UnregisterClassA("fullscreen_class", GetModuleHandleA(NULL));
+
+    /* Test moving a full screen window to another monitor */
+    memset(&monitor_info, 0, sizeof(monitor_info));
+    EnumDisplayMonitors(NULL, NULL, enum_monitor_cb, (LPARAM)&monitor_info);
+    if (!IsRectEmpty(&monitor_info.first_monitor) && !IsRectEmpty(&monitor_info.second_monitor))
+    {
+        hwnd = CreateWindowA("static", "static1", WS_POPUP | WS_VISIBLE,
+                monitor_info.first_monitor.left, monitor_info.first_monitor.top,
+                monitor_info.first_monitor.right - monitor_info.first_monitor.left,
+                monitor_info.first_monitor.bottom - monitor_info.first_monitor.top, NULL, NULL,
+                GetModuleHandleA(NULL), NULL);
+        ok(!!hwnd, "CreateWindow failed, error %#x.\n", GetLastError());
+        flush_events(TRUE);
+
+        GetWindowRect(hwnd, &rc);
+        ok(EqualRect(&rc, &monitor_info.first_monitor), "Expected window rect %s, got %s.\n",
+                wine_dbgstr_rect(&monitor_info.first_monitor), wine_dbgstr_rect(&rc));
+
+        SetWindowPos(hwnd, 0, monitor_info.second_monitor.left, monitor_info.second_monitor.top,
+                monitor_info.second_monitor.right - monitor_info.second_monitor.left,
+                monitor_info.second_monitor.bottom - monitor_info.second_monitor.top, SWP_NOZORDER);
+        flush_events(TRUE);
+        GetWindowRect(hwnd, &rc);
+        ok(EqualRect(&rc, &monitor_info.second_monitor), "Expected window rect %s, got %s.\n",
+                wine_dbgstr_rect(&monitor_info.second_monitor), wine_dbgstr_rect(&rc));
+        DestroyWindow(hwnd);
+
+        hwnd = CreateWindowA("static", "static2", WS_POPUP | WS_VISIBLE,
+                monitor_info.second_monitor.left, monitor_info.second_monitor.top,
+                100, 100, NULL, NULL, NULL, NULL);
+        ok(!!hwnd, "CreateWindow failed, error %#x.\n", GetLastError());
+        flush_events(TRUE);
+
+        SetWindowPos(hwnd, 0, monitor_info.first_monitor.left, monitor_info.first_monitor.top,
+                monitor_info.first_monitor.right - monitor_info.first_monitor.left,
+                monitor_info.first_monitor.bottom - monitor_info.first_monitor.top, SWP_NOZORDER);
+        flush_events(TRUE);
+        GetWindowRect(hwnd, &rc);
+        ok(EqualRect(&rc, &monitor_info.first_monitor), "Expected window rect %s, got %s.\n",
+                wine_dbgstr_rect(&monitor_info.first_monitor), wine_dbgstr_rect(&rc));
+        DestroyWindow(hwnd);
+    }
+    else
+    {
+        skip("This test requires two monitors present.\n");
+    }
 }
 
 static BOOL test_thick_child_got_minmax;
@@ -9733,7 +9889,7 @@ static void test_FlashWindowEx(void)
 
     SetLastError(0xdeadbeef);
     ret = pFlashWindowEx(&finfo);
-    todo_wine ok(!ret, "previous window state should not be active\n");
+    ok(!ret, "previous window state should not be active\n");
 
     finfo.cbSize = sizeof(FLASHWINFO) - 1;
     SetLastError(0xdeadbeef);
@@ -9784,7 +9940,7 @@ static void test_FlashWindowEx(void)
     finfo.dwFlags = FLASHW_STOP;
     SetLastError(0xdeadbeef);
     ret = pFlashWindowEx(&finfo);
-    ok(prev != ret, "previous window state should be different\n");
+    todo_wine ok(prev != ret, "previous window state should be different\n");
 
     DestroyWindow( hwnd );
 }
