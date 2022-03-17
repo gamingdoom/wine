@@ -242,12 +242,16 @@ extern void CDECL X11DRV_WindowPosChanged( HWND hwnd, HWND insert_after, UINT sw
                                            struct window_surface *surface ) DECLSPEC_HIDDEN;
 extern BOOL CDECL X11DRV_SystemParametersInfo( UINT action, UINT int_param, void *ptr_param,
                                                UINT flags ) DECLSPEC_HIDDEN;
+extern void CDECL X11DRV_UpdateCandidatePos( HWND hwnd, const RECT *caret_rect ) DECLSPEC_HIDDEN;
 extern void CDECL X11DRV_ThreadDetach(void) DECLSPEC_HIDDEN;
 
 /* X11 driver internal functions */
 
 extern void X11DRV_Xcursor_Init(void) DECLSPEC_HIDDEN;
-extern void X11DRV_XInput2_Init(void) DECLSPEC_HIDDEN;
+extern void x11drv_xinput_load(void) DECLSPEC_HIDDEN;
+extern void x11drv_xinput_init(void) DECLSPEC_HIDDEN;
+extern void x11drv_xinput_enable( Display *display, Window window, long event_mask ) DECLSPEC_HIDDEN;
+extern void x11drv_xinput_disable( Display *display, Window window, long event_mask ) DECLSPEC_HIDDEN;
 
 extern DWORD copy_image_bits( BITMAPINFO *info, BOOL is_r8g8b8, XImage *image,
                               const struct gdi_image_bits *src_bits, struct gdi_image_bits *dst_bits,
@@ -292,10 +296,10 @@ extern BOOL IME_SetCompositionString(DWORD dwIndex, LPCVOID lpComp,
                                      DWORD dwReadLen) DECLSPEC_HIDDEN;
 extern void IME_SetResultString(LPWSTR lpResult, DWORD dwResultlen) DECLSPEC_HIDDEN;
 
-extern void X11DRV_XDND_EnterEvent( HWND hWnd, XClientMessageEvent *event ) DECLSPEC_HIDDEN;
-extern void X11DRV_XDND_PositionEvent( HWND hWnd, XClientMessageEvent *event ) DECLSPEC_HIDDEN;
-extern void X11DRV_XDND_DropEvent( HWND hWnd, XClientMessageEvent *event ) DECLSPEC_HIDDEN;
-extern void X11DRV_XDND_LeaveEvent( HWND hWnd, XClientMessageEvent *event ) DECLSPEC_HIDDEN;
+extern void X11DRV_XDND_EnterEvent( HWND hWnd, XEvent *xev ) DECLSPEC_HIDDEN;
+extern void X11DRV_XDND_PositionEvent( HWND hWnd, XEvent *xev ) DECLSPEC_HIDDEN;
+extern void X11DRV_XDND_DropEvent( HWND hWnd, XEvent *xev ) DECLSPEC_HIDDEN;
+extern void X11DRV_XDND_LeaveEvent( HWND hWnd, XEvent *xev ) DECLSPEC_HIDDEN;
 extern void X11DRV_CLIPBOARD_ImportSelection( Display *display, Window win, Atom selection,
                                               Atom *targets, UINT count,
                                               void (*callback)( Atom, UINT, HANDLE )) DECLSPEC_HIDDEN;
@@ -338,7 +342,8 @@ enum x11drv_escape_codes
     X11DRV_GET_DRAWABLE,     /* get current drawable for a DC */
     X11DRV_START_EXPOSURES,  /* start graphics exposures */
     X11DRV_END_EXPOSURES,    /* end graphics exposures */
-    X11DRV_FLUSH_GL_DRAWABLE /* flush changes made to the gl drawable */
+    X11DRV_FLUSH_GL_DRAWABLE, /* flush changes made to the gl drawable */
+    X11DRV_FLUSH_GDI_DISPLAY /* flush the gdi display */
 };
 
 struct x11drv_escape_set_drawable
@@ -368,6 +373,14 @@ struct x11drv_escape_flush_gl_drawable
  * X11 USER driver
  */
 
+enum xi2_state
+{
+    xi_unavailable = -1,
+    xi_unknown,
+    xi_disabled,
+    xi_enabled
+};
+
 struct x11drv_thread_data
 {
     Display *display;
@@ -383,13 +396,11 @@ struct x11drv_thread_data
     HWND     clip_hwnd;            /* message window stored in desktop while clipping is active */
     DWORD    clip_reset;           /* time when clipping was last reset */
 #ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
-    enum { xi_unavailable = -1, xi_unknown, xi_disabled, xi_enabled } xi2_state; /* XInput2 state */
-    void    *xi2_devices;          /* list of XInput2 devices (valid when state is enabled) */
-    int      xi2_device_count;
+    enum xi2_state xi2_state;      /* XInput2 state */
     XIValuatorClassInfo x_valuator;
     XIValuatorClassInfo y_valuator;
     int      xi2_core_pointer;     /* XInput2 core pointer id */
-    int      xi2_current_slave;    /* Current slave driving the Core pointer */
+    int      xi2_rawinput_only;
 #endif /* HAVE_X11_EXTENSIONS_XINPUT2_H */
 };
 
@@ -431,7 +442,6 @@ extern Colormap default_colormap DECLSPEC_HIDDEN;
 extern XPixmapFormatValues **pixmap_formats DECLSPEC_HIDDEN;
 extern Window root_window DECLSPEC_HIDDEN;
 extern BOOL clipping_cursor DECLSPEC_HIDDEN;
-extern BOOL keyboard_grabbed DECLSPEC_HIDDEN;
 extern unsigned int screen_bpp DECLSPEC_HIDDEN;
 extern BOOL use_xkb DECLSPEC_HIDDEN;
 extern BOOL usexrandr DECLSPEC_HIDDEN;
@@ -588,7 +598,8 @@ enum x11drv_window_messages
     WM_X11DRV_CLIP_CURSOR_NOTIFY,
     WM_X11DRV_CLIP_CURSOR_REQUEST,
     WM_X11DRV_DELETE_TAB,
-    WM_X11DRV_ADD_TAB
+    WM_X11DRV_ADD_TAB,
+    WM_X11DRV_RELEASE_CURSOR,
 };
 
 /* _NET_WM_STATE properties that we keep track of */
@@ -685,10 +696,10 @@ extern LRESULT clip_cursor_notify( HWND hwnd, HWND prev_clip_hwnd, HWND new_clip
 extern LRESULT clip_cursor_request( HWND hwnd, BOOL fullscreen, BOOL reset ) DECLSPEC_HIDDEN;
 extern void ungrab_clipping_window(void) DECLSPEC_HIDDEN;
 extern void reset_clipping_window(void) DECLSPEC_HIDDEN;
-extern void retry_grab_clipping_window(void) DECLSPEC_HIDDEN;
 extern BOOL clip_fullscreen_window( HWND hwnd, BOOL reset ) DECLSPEC_HIDDEN;
 extern void move_resize_window( HWND hwnd, int dir ) DECLSPEC_HIDDEN;
 extern void X11DRV_InitKeyboard( Display *display ) DECLSPEC_HIDDEN;
+extern void X11DRV_InitMouse( Display *display ) DECLSPEC_HIDDEN;
 extern DWORD CDECL X11DRV_MsgWaitForMultipleObjectsEx( DWORD count, const HANDLE *handles, DWORD timeout,
                                                        DWORD mask, DWORD flags ) DECLSPEC_HIDDEN;
 
