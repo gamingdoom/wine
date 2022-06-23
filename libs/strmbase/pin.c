@@ -677,6 +677,31 @@ static const IPinVtbl source_vtbl =
     source_NewSegment,
 };
 
+HRESULT WINAPI BaseOutputPinImpl_GetDeliveryBuffer(struct strmbase_source *This,
+        IMediaSample **ppSample, REFERENCE_TIME *tStart, REFERENCE_TIME *tStop, DWORD dwFlags)
+{
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %p, %p, %x)\n", This, ppSample, tStart, tStop, dwFlags);
+
+    if (!This->pin.peer)
+        hr = VFW_E_NOT_CONNECTED;
+    else
+    {
+        hr = IMemAllocator_GetBuffer(This->pAllocator, ppSample, tStart, tStop, dwFlags);
+
+        if (SUCCEEDED(hr))
+            hr = IMediaSample_SetTime(*ppSample, tStart, tStop);
+    }
+
+    return hr;
+}
+
+HRESULT WINAPI BaseOutputPinImpl_InitAllocator(struct strmbase_source *This, IMemAllocator **pMemAlloc)
+{
+    return CoCreateInstance(&CLSID_MemoryAllocator, NULL, CLSCTX_INPROC_SERVER, &IID_IMemAllocator, (LPVOID*)pMemAlloc);
+}
+
 HRESULT WINAPI BaseOutputPinImpl_DecideAllocator(struct strmbase_source *This,
         IMemInputPin *pPin, IMemAllocator **pAlloc)
 {
@@ -685,8 +710,8 @@ HRESULT WINAPI BaseOutputPinImpl_DecideAllocator(struct strmbase_source *This,
     hr = IMemInputPin_GetAllocator(pPin, pAlloc);
 
     if (hr == VFW_E_NO_ALLOCATOR)
-        hr = CoCreateInstance(&CLSID_MemoryAllocator, NULL,
-                CLSCTX_INPROC_SERVER, &IID_IMemAllocator, (void **)pAlloc);
+        /* Input pin provides no allocator, use standard memory allocator */
+        hr = BaseOutputPinImpl_InitAllocator(This, pAlloc);
 
     if (SUCCEEDED(hr))
     {
