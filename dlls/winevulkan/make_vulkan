@@ -111,7 +111,6 @@ UNSUPPORTED_EXTENSIONS = [
     "VK_EXT_physical_device_drm",
     "VK_GOOGLE_surfaceless_query",
     "VK_KHR_external_fence_fd",
-    "VK_KHR_external_memory_fd",
     "VK_KHR_external_semaphore_fd",
 
     # Extensions which require callback handling
@@ -126,7 +125,7 @@ UNSUPPORTED_EXTENSIONS = [
 # winevulkan may nonetheless use, or extensions we want to generate headers for
 # but not expose to applications (useful for test commits)
 UNEXPOSED_EXTENSIONS = {
-    "VK_KHR_external_memory_win32",
+    "VK_KHR_external_memory_fd",
 }
 
 # The Vulkan loader provides entry-points for core functionality and important
@@ -195,19 +194,24 @@ FUNCTION_OVERRIDES = {
     "vkEnumerateDeviceLayerProperties": {"dispatch": True, "driver": False, "thunk": ThunkType.NONE},
     "vkEnumeratePhysicalDeviceGroups" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkEnumeratePhysicalDevices" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
-    "vkGetPhysicalDeviceExternalBufferProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkGetPhysicalDeviceExternalBufferProperties" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkGetPhysicalDeviceExternalFenceProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
     "vkGetPhysicalDeviceExternalSemaphoreProperties" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
     "vkGetPhysicalDeviceImageFormatProperties2" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
+    "vkGetPhysicalDeviceProperties" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PUBLIC, "loader_thunk" : ThunkType.PRIVATE},
     "vkGetPhysicalDeviceProperties2" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PUBLIC, "loader_thunk" : ThunkType.PRIVATE},
     "vkGetPhysicalDeviceProperties2KHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PUBLIC, "loader_thunk" : ThunkType.PRIVATE},
 
     # Device functions
     "vkAllocateCommandBuffers" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkAllocateMemory" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkCreateBuffer" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkCreateCommandPool" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkCreateImage" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkDestroyCommandPool" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkDestroyDevice" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkFreeCommandBuffers" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkFreeMemory" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkGetDeviceProcAddr" : {"dispatch" : False, "driver" : True, "thunk" : ThunkType.NONE, "loader_thunk" : ThunkType.NONE},
     "vkGetDeviceQueue" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkGetDeviceQueue2" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
@@ -228,16 +232,18 @@ FUNCTION_OVERRIDES = {
     "vkGetPhysicalDeviceWin32PresentationSupportKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
 
     # VK_KHR_swapchain
-    "vkCreateSwapchainKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkDestroySwapchainKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkGetSwapchainImagesKHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
-    "vkQueuePresentKHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
+    "vkAcquireNextImageKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.PUBLIC},
+    "vkAcquireNextImage2KHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
+    "vkCreateSwapchainKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
+    "vkDestroySwapchainKHR" : {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
+    "vkGetSwapchainImagesKHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
+    "vkQueuePresentKHR": {"dispatch" : True, "driver" : True, "thunk" : ThunkType.NONE},
 
     # VK_KHR_external_fence_capabilities
     "vkGetPhysicalDeviceExternalFencePropertiesKHR" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
 
     # VK_KHR_external_memory_capabilities
-    "vkGetPhysicalDeviceExternalBufferPropertiesKHR" : {"dispatch" : False, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkGetPhysicalDeviceExternalBufferPropertiesKHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkGetPhysicalDeviceImageFormatProperties2KHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.PRIVATE},
 
     # VK_KHR_external_semaphore_capabilities
@@ -261,12 +267,22 @@ FUNCTION_OVERRIDES = {
     # VK_EXT_debug_report
     "vkCreateDebugReportCallbackEXT" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
     "vkDestroyDebugReportCallbackEXT" : {"dispatch": True, "driver" : False, "thunk" : ThunkType.NONE},
+
+    # VK_KHR_external_memory_win32
+    "vkGetMemoryWin32HandleKHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
+    "vkGetMemoryWin32HandlePropertiesKHR" : {"dispatch" : True, "driver" : False, "thunk" : ThunkType.NONE},
 }
 
 STRUCT_CHAIN_CONVERSIONS = {
     # Ignore to not confuse host loader.
     "VkDeviceCreateInfo": ["VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO"],
     "VkInstanceCreateInfo": ["VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO"],
+
+    # Structs which require pNext chain modification
+    "VkBufferCreateInfo": [],
+    "VkImageCreateInfo": [],
+    "VkMemoryAllocateInfo": ["VK_STRUCTURE_TYPE_EXPORT_MEMORY_WIN32_HANDLE_INFO_KHR", "VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR"],
+    "VkPhysicalDeviceImageFormatInfo2": [],
 }
 
 
@@ -1082,6 +1098,8 @@ class VkHandle(object):
     def native_handle(self, name):
         """ Provide access to the native handle of a wrapped object. """
 
+        if self.name == "VkSwapchainKHR":
+            return "((struct VkSwapchainKHR_T *)(uintptr_t) ({0}))->swapchain".format(name)
         if self.name == "VkCommandPool":
             return "wine_cmd_pool_from_handle({0})->command_pool".format(name)
         if self.name == "VkDebugUtilsMessengerEXT":
@@ -1090,6 +1108,8 @@ class VkHandle(object):
             return "wine_debug_report_callback_from_handle({0})->debug_callback".format(name)
         if self.name == "VkSurfaceKHR":
             return "wine_surface_from_handle({0})->surface".format(name)
+        if self.name == "VkDeviceMemory":
+            return "wine_dev_mem_from_handle({0})->dev_mem".format(name)
 
         native_handle_name = None
 
@@ -2848,6 +2868,13 @@ class VkGenerator(object):
         f.write("    wine_vk_call,\n")
         f.write("    wine_vk_is_available_instance_function,\n")
         f.write("    wine_vk_is_available_device_function,\n")
+        f.write("    __wine_get_native_VkDevice,\n")
+        f.write("    __wine_get_native_VkInstance,\n")
+        f.write("    __wine_get_native_VkPhysicalDevice,\n")
+        f.write("    __wine_get_native_VkQueue,\n")
+        f.write("    __wine_get_wrapped_VkPhysicalDevice,\n")
+        f.write("    __wine_create_vk_instance_with_callback,\n")
+        f.write("    __wine_create_vk_device_with_callback,\n")
         f.write("};\n")
 
     def generate_thunks_h(self, f, prefix):
@@ -3190,6 +3217,18 @@ class VkGenerator(object):
         f.write("\n")
         f.write("    /* winevulkan specific functions */\n")
         f.write("    VkSurfaceKHR (*p_wine_get_native_surface)(VkSurfaceKHR);\n")
+        f.write("\n    /* Optional. Returns TRUE if FS hack is active, otherwise returns FALSE. If\n")
+        f.write("     * it returns TRUE, then real_sz will contain the actual display\n")
+        f.write("     * resolution; user_sz will contain the app's requested mode; and dst_blit\n")
+        f.write("     * will contain the area to blit the user image to in real coordinates.\n")
+        f.write("     * All parameters are optional. */\n")
+        f.write("    VkBool32 (*query_fs_hack)(VkSurfaceKHR surface, VkExtent2D *real_sz, VkExtent2D *user_sz, VkRect2D *dst_blit, VkFilter *filter, BOOL *fsr, float *sharpness);\n")
+
+        f.write("    VkResult (*create_vk_instance_with_callback)(const VkInstanceCreateInfo *create_info,\n")
+        f.write("            const VkAllocationCallbacks *allocator, VkInstance *instance,\n")
+        f.write("            VkResult (WINAPI *native_vkCreateInstance)(const VkInstanceCreateInfo *, const VkAllocationCallbacks *,\n")
+        f.write("            VkInstance *, void * (*)(VkInstance, const char *), void *), void *native_vkCreateInstance_context);\n")
+
         f.write("};\n\n")
 
         f.write("extern const struct vulkan_funcs * CDECL __wine_get_vulkan_driver(UINT version);\n\n")
@@ -3230,6 +3269,13 @@ class VkGenerator(object):
         f.write("@ stdcall -private vk_icdGetInstanceProcAddr(ptr str)\n")
         f.write("@ stdcall -private vk_icdGetPhysicalDeviceProcAddr(ptr str)\n")
         f.write("@ stdcall -private vk_icdNegotiateLoaderICDInterfaceVersion(ptr)\n")
+        f.write("@ stdcall __wine_get_native_VkDevice(ptr)\n")
+        f.write("@ stdcall __wine_get_native_VkInstance(ptr)\n")
+        f.write("@ stdcall __wine_get_native_VkPhysicalDevice(ptr)\n")
+        f.write("@ stdcall __wine_get_native_VkQueue(ptr)\n")
+        f.write("@ stdcall __wine_get_wrapped_VkPhysicalDevice(ptr ptr)\n")
+        f.write("@ stdcall __wine_create_vk_instance_with_callback(ptr ptr ptr ptr ptr)\n")
+        f.write("@ stdcall __wine_create_vk_device_with_callback(ptr ptr ptr ptr ptr ptr)\n")
 
         # Export symbols for all Vulkan Core functions.
         for func in self.registry.funcs.values():
