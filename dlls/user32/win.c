@@ -1740,8 +1740,18 @@ HWND WIN_CreateWindowEx( CREATESTRUCTW *cs, LPCWSTR className, HINSTANCE module,
     if ((cs->style & WS_THICKFRAME) || !(cs->style & (WS_POPUP | WS_CHILD)))
     {
         MINMAXINFO info = WINPOS_GetMinMaxInfo( hwnd );
-        cx = max( min( cx, info.ptMaxTrackSize.x ), info.ptMinTrackSize.x );
-        cy = max( min( cy, info.ptMaxTrackSize.y ), info.ptMinTrackSize.y );
+
+        /* HACK: This code changes the window's size to fit the display. However,
+         * some games (Bayonetta, Dragon's Dogma) will then have the incorrect
+         * render size. So just let windows be too big to fit the display. */
+        if (__wine_get_window_manager() != WINE_WM_X11_STEAMCOMPMGR)
+        {
+            cx = min( cx, info.ptMaxTrackSize.x );
+            cy = min( cy, info.ptMaxTrackSize.y );
+        }
+
+        cx = max( cx, info.ptMinTrackSize.x );
+        cy = max( cy, info.ptMinTrackSize.y );
     }
 
     if (cx < 0) cx = 0;
@@ -3867,13 +3877,12 @@ BOOL WINAPI FlashWindowEx( PFLASHWINFO pfinfo )
         if (!wndPtr || wndPtr == WND_OTHER_PROCESS || wndPtr == WND_DESKTOP) return FALSE;
         hwnd = wndPtr->obj.handle;  /* make it a full handle */
 
-        if (pfinfo->dwFlags) wparam = !(wndPtr->flags & WIN_NCACTIVATED);
-        else wparam = (hwnd == GetForegroundWindow());
+        wparam = (wndPtr->flags & WIN_NCACTIVATED) != 0;
 
         WIN_ReleasePtr( wndPtr );
         SendMessageW( hwnd, WM_NCACTIVATE, wparam, 0 );
         USER_Driver->pFlashWindowEx( pfinfo );
-        return wparam;
+        return (pfinfo->dwFlags & FLASHW_CAPTION) ? TRUE : wparam;
     }
 }
 
