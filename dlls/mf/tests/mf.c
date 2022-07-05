@@ -1215,6 +1215,8 @@ static void test_session_events(IMFMediaSession *session)
 
 static void test_media_session(void)
 {
+    IMFRateControl *rate_control, *rate_control2;
+    MFCLOCK_PROPERTIES clock_props;
     IMFRateSupport *rate_support;
     IMFAttributes *attributes;
     IMFMediaSession *session;
@@ -1224,7 +1226,10 @@ static void test_media_session(void)
     DWORD status, caps;
     IMFGetService *gs;
     IMFClock *clock;
+    IUnknown *unk;
     HRESULT hr;
+    float rate;
+    BOOL thin;
 
     hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
     ok(hr == S_OK, "Startup failure, hr %#x.\n", hr);
@@ -1233,15 +1238,81 @@ static void test_media_session(void)
     ok(hr == S_OK, "Failed to create media session, hr %#x.\n", hr);
 
     check_interface(session, &IID_IMFGetService, TRUE);
-    check_interface(session, &IID_IMFRateSupport, TRUE);
-    check_interface(session, &IID_IMFRateControl, TRUE);
     check_interface(session, &IID_IMFAttributes, FALSE);
     check_interface(session, &IID_IMFTopologyNodeAttributeEditor, FALSE);
-    check_interface(session, &IID_IMFLocalMFTRegistration, FALSE);
-    check_service_interface(session, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateSupport, TRUE);
-    check_service_interface(session, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateControl, TRUE);
-    check_service_interface(session, &MF_TOPONODE_ATTRIBUTE_EDITOR_SERVICE, &IID_IMFTopologyNodeAttributeEditor, TRUE);
-    check_service_interface(session, &MF_LOCAL_MFT_REGISTRATION_SERVICE, &IID_IMFLocalMFTRegistration, TRUE);
+
+    hr = MFGetService((IUnknown *)session, &MF_TOPONODE_ATTRIBUTE_EDITOR_SERVICE, &IID_IMFTopologyNodeAttributeEditor,
+            (void **)&unk);
+    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+
+    check_interface(unk, &IID_IMFMediaSession, FALSE);
+
+    IUnknown_Release(unk);
+
+    hr = MFGetService((IUnknown *)session, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateSupport, (void **)&rate_support);
+    ok(hr == S_OK, "Failed to get rate support interface, hr %#x.\n", hr);
+
+    hr = MFGetService((IUnknown *)session, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateControl, (void **)&rate_control);
+    ok(hr == S_OK, "Failed to get rate control interface, hr %#x.\n", hr);
+
+    hr = MFGetService((IUnknown *)session, &MF_LOCAL_MFT_REGISTRATION_SERVICE, &IID_IMFLocalMFTRegistration, (void **)&unk);
+    ok(hr == S_OK || broken(hr == E_NOINTERFACE) /* Vista */, "Failed to get registration service, hr %#x.\n", hr);
+    if (SUCCEEDED(hr))
+        IUnknown_Release(unk);
+
+    hr = IMFRateSupport_QueryInterface(rate_support, &IID_IMFMediaSession, (void **)&unk);
+    ok(hr == S_OK, "Failed to get session interface, hr %#x.\n", hr);
+    ok(unk == (IUnknown *)session, "Unexpected pointer.\n");
+    IUnknown_Release(unk);
+
+    hr = IMFRateControl_GetRate(rate_control, NULL, NULL);
+    ok(FAILED(hr), "Unexpected hr %#x.\n", hr);
+
+    rate = 0.0f;
+    hr = IMFRateControl_GetRate(rate_control, NULL, &rate);
+    ok(hr == S_OK, "Failed to get playback rate, hr %#x.\n", hr);
+    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
+
+    hr = IMFRateControl_GetRate(rate_control, &thin, NULL);
+    ok(FAILED(hr), "Unexpected hr %#x.\n", hr);
+
+    thin = TRUE;
+    rate = 0.0f;
+    hr = IMFRateControl_GetRate(rate_control, &thin, &rate);
+    ok(hr == S_OK, "Failed to get playback rate, hr %#x.\n", hr);
+    ok(!thin, "Unexpected thinning.\n");
+    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
+
+    hr = IMFMediaSession_GetClock(session, &clock);
+    ok(hr == S_OK, "Failed to get clock, hr %#x.\n", hr);
+
+    check_interface(clock, &IID_IMFPresentationClock, TRUE);
+
+    hr = IMFClock_QueryInterface(clock, &IID_IMFRateControl, (void **)&rate_control2);
+    ok(hr == S_OK, "Failed to get rate control, hr %#x.\n", hr);
+
+    rate = 0.0f;
+    hr = IMFRateControl_GetRate(rate_control2, NULL, &rate);
+    ok(hr == S_OK, "Failed to get clock rate, hr %#x.\n", hr);
+    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
+
+    hr = IMFRateControl_SetRate(rate_control, FALSE, 1.5f);
+todo_wine
+    ok(hr == S_OK, "Failed to set rate, hr %#x.\n", hr);
+
+    IMFRateControl_Release(rate_control2);
+
+    hr = IMFClock_GetProperties(clock, &clock_props);
+    ok(hr == MF_E_CLOCK_NO_TIME_SOURCE, "Unexpected hr %#x.\n", hr);
+    IMFClock_Release(clock);
+
+    IMFRateControl_Release(rate_control);
+    IMFRateSupport_Release(rate_support);
+
+    IMFMediaSession_Release(session);
+
+    hr = MFCreateMediaSession(NULL, &session);
+    ok(hr == S_OK, "Failed to create media session, hr %#x.\n", hr);
 
     hr = IMFMediaSession_GetClock(session, &clock);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
@@ -1333,103 +1404,6 @@ static void test_media_session(void)
     ok(hr == S_OK, "Failed to create media session, hr %#x.\n", hr);
 
     test_session_events(session);
-
-    IMFMediaSession_Release(session);
-
-    hr = MFShutdown();
-    ok(hr == S_OK, "Shutdown failure, hr %#x.\n", hr);
-}
-
-static void test_media_session_rate_control(void)
-{
-    IMFRateControl *rate_control, *clock_rate_control;
-    IMFPresentationClock *presentation_clock;
-    IMFPresentationTimeSource *time_source;
-    MFCLOCK_PROPERTIES clock_props;
-    IMFRateSupport *rate_support;
-    IMFMediaSession *session;
-    IMFClock *clock;
-    HRESULT hr;
-    float rate;
-    BOOL thin;
-
-    hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
-    ok(hr == S_OK, "Startup failure, hr %#x.\n", hr);
-
-    hr = MFCreateMediaSession(NULL, &session);
-    ok(hr == S_OK, "Failed to create media session, hr %#x.\n", hr);
-
-    hr = MFGetService((IUnknown *)session, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateSupport, (void **)&rate_support);
-    ok(hr == S_OK, "Failed to get rate support interface, hr %#x.\n", hr);
-
-    hr = MFGetService((IUnknown *)session, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateControl, (void **)&rate_control);
-    ok(hr == S_OK, "Failed to get rate control interface, hr %#x.\n", hr);
-
-    hr = IMFRateControl_GetRate(rate_control, NULL, NULL);
-    ok(FAILED(hr), "Unexpected hr %#x.\n", hr);
-
-    rate = 0.0f;
-    hr = IMFRateControl_GetRate(rate_control, NULL, &rate);
-    ok(hr == S_OK, "Failed to get playback rate, hr %#x.\n", hr);
-    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
-
-    hr = IMFRateControl_GetRate(rate_control, &thin, NULL);
-    ok(FAILED(hr), "Unexpected hr %#x.\n", hr);
-
-    thin = TRUE;
-    rate = 0.0f;
-    hr = IMFRateControl_GetRate(rate_control, &thin, &rate);
-    ok(hr == S_OK, "Failed to get playback rate, hr %#x.\n", hr);
-    ok(!thin, "Unexpected thinning.\n");
-    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
-
-    hr = IMFMediaSession_GetClock(session, &clock);
-    ok(hr == S_OK, "Failed to get clock, hr %#x.\n", hr);
-
-    hr = IMFClock_QueryInterface(clock, &IID_IMFPresentationClock, (void **)&presentation_clock);
-    ok(hr == S_OK, "Failed to get rate control, hr %#x.\n", hr);
-
-    hr = IMFClock_QueryInterface(clock, &IID_IMFRateControl, (void **)&clock_rate_control);
-    ok(hr == S_OK, "Failed to get rate control, hr %#x.\n", hr);
-
-    rate = 0.0f;
-    hr = IMFRateControl_GetRate(clock_rate_control, NULL, &rate);
-    ok(hr == S_OK, "Failed to get clock rate, hr %#x.\n", hr);
-    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
-
-    hr = IMFRateControl_SetRate(clock_rate_control, FALSE, 1.5f);
-    ok(hr == MF_E_CLOCK_NO_TIME_SOURCE, "Unexpected hr %#x.\n", hr);
-
-    hr = IMFRateControl_SetRate(rate_control, FALSE, 1.5f);
-    todo_wine
-    ok(hr == S_OK, "Failed to set rate, hr %#x.\n", hr);
-
-    hr = IMFClock_GetProperties(clock, &clock_props);
-    ok(hr == MF_E_CLOCK_NO_TIME_SOURCE, "Unexpected hr %#x.\n", hr);
-
-    hr = MFCreateSystemTimeSource(&time_source);
-    ok(hr == S_OK, "Failed to create time source, hr %#x.\n", hr);
-
-    hr = IMFPresentationClock_SetTimeSource(presentation_clock, time_source);
-    ok(hr == S_OK, "Failed to set time source, hr %#x.\n", hr);
-
-    hr = IMFRateControl_SetRate(rate_control, FALSE, 1.5f);
-    todo_wine
-    ok(hr == S_OK, "Failed to set rate, hr %#x.\n", hr);
-
-    rate = 0.0f;
-    hr = IMFRateControl_GetRate(clock_rate_control, NULL, &rate);
-    ok(hr == S_OK, "Failed to get clock rate, hr %#x.\n", hr);
-    ok(rate == 1.0f, "Unexpected rate %f.\n", rate);
-
-    IMFPresentationTimeSource_Release(time_source);
-
-    IMFRateControl_Release(clock_rate_control);
-    IMFPresentationClock_Release(presentation_clock);
-    IMFClock_Release(clock);
-
-    IMFRateControl_Release(rate_control);
-    IMFRateSupport_Release(rate_support);
 
     IMFMediaSession_Release(session);
 
@@ -1941,7 +1915,7 @@ static void test_topology_loader(void)
 
     /* Empty topology */
     hr = IMFTopoLoader_Load(loader, topology, &full_topology, NULL);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TOPO_UNSUPPORTED, "Unexpected hr %#x.\n", hr);
 
     /* Add source node. */
@@ -1983,7 +1957,7 @@ static void test_topology_loader(void)
 
     /* Source node only. */
     hr = IMFTopoLoader_Load(loader, topology, &full_topology, NULL);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TOPO_UNSUPPORTED, "Unexpected hr %#x.\n", hr);
 
     hr = MFCreateTopologyNode(MF_TOPOLOGY_OUTPUT_NODE, &sink_node);
@@ -2009,7 +1983,7 @@ static void test_topology_loader(void)
     ok(hr == S_OK, "Failed to add sink node, hr %#x.\n", hr);
 
     hr = IMFTopoLoader_Load(loader, topology, &full_topology, NULL);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TOPO_UNSUPPORTED, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTopologyNode_ConnectOutput(src_node, 0, sink_node, 0);
@@ -2043,7 +2017,7 @@ static void test_topology_loader(void)
         ok(!count, "Unexpected count %u.\n", count);
 
         hr = IMFTopoLoader_Load(loader, topology, &full_topology, NULL);
-        todo_wine_if(test->flags & LOADER_TODO)
+todo_wine_if(test->flags & LOADER_TODO)
         ok(hr == test->expected_result, "Unexpected hr %#x on test %u.\n", hr, i);
         ok(full_topology != topology, "Unexpected instance.\n");
 
@@ -2051,7 +2025,7 @@ static void test_topology_loader(void)
         {
             hr = IMFTopology_GetCount(full_topology, &count);
             ok(hr == S_OK, "Failed to get attribute count, hr %#x.\n", hr);
-            todo_wine
+todo_wine
             ok(count == 1, "Unexpected count %u.\n", count);
 
             value = 0xdeadbeef;
@@ -2068,7 +2042,7 @@ todo_wine {
 
             hr = IMFTopology_GetNodeCount(full_topology, &node_count);
             ok(hr == S_OK, "Failed to get node count, hr %#x.\n", hr);
-            todo_wine_if(test->flags & (LOADER_EXPECTED_CONVERTER | LOADER_EXPECTED_DECODER))
+        todo_wine_if(test->flags & (LOADER_EXPECTED_CONVERTER | LOADER_EXPECTED_DECODER))
             ok(node_count == count, "Unexpected node count %u.\n", node_count);
 
             hr = IMFTopologyNode_GetTopoNodeID(src_node, &node_id);
@@ -2595,19 +2569,6 @@ static void test_presentation_clock(void)
     ok(hr == S_OK, "Failed to get clock properties, hr %#x.\n", hr);
     ok(!memcmp(&props, &props2, sizeof(props)), "Unexpected clock properties.\n");
 
-    /* Changing rate at initial state. */
-    hr = IMFPresentationClock_GetState(clock, 0, &state);
-    ok(hr == S_OK, "Failed to get clock state, hr %#x.\n", hr);
-    ok(state == MFCLOCK_STATE_INVALID, "Unexpected state %d.\n", state);
-
-    hr = IMFRateControl_SetRate(rate_control, FALSE, 0.0f);
-    ok(hr == S_OK, "Failed to set clock rate, hr %#x.\n", hr);
-    hr = IMFRateControl_GetRate(rate_control, &thin, &rate);
-    ok(hr == S_OK, "Failed to get clock rate, hr %#x.\n", hr);
-    ok(rate == 0.0f, "Unexpected rate.\n");
-    hr = IMFRateControl_SetRate(rate_control, FALSE, 1.0f);
-    ok(hr == S_OK, "Failed to set clock rate, hr %#x.\n", hr);
-
     /* State changes. */
     for (i = 0; i < ARRAY_SIZE(clock_state_change); ++i)
     {
@@ -2686,10 +2647,6 @@ static void test_presentation_clock(void)
     hr = IMFRateControl_SetRate(rate_control, FALSE, 0.5f);
     ok(hr == S_OK, "Failed to set clock rate, hr %#x.\n", hr);
     hr = IMFRateControl_SetRate(rate_control, TRUE, -1.0f);
-    ok(hr == MF_E_THINNING_UNSUPPORTED, "Unexpected hr %#x.\n", hr);
-    hr = IMFRateControl_SetRate(rate_control, TRUE, 0.0f);
-    ok(hr == MF_E_THINNING_UNSUPPORTED, "Unexpected hr %#x.\n", hr);
-    hr = IMFRateControl_SetRate(rate_control, TRUE, 1.0f);
     ok(hr == MF_E_THINNING_UNSUPPORTED, "Unexpected hr %#x.\n", hr);
 
     hr = IMFPresentationClock_GetState(clock, 0, &state);
@@ -3437,9 +3394,9 @@ static void test_video_processor(void)
         goto failed;
     }
 
-    todo_wine
+todo_wine
     check_interface(transform, &IID_IMFVideoProcessorControl, TRUE);
-    todo_wine
+todo_wine
     check_interface(transform, &IID_IMFRealTimeClientEx, TRUE);
     check_interface(transform, &IID_IMFMediaEventGenerator, FALSE);
     check_interface(transform, &IID_IMFShutdown, FALSE);
@@ -3450,7 +3407,7 @@ static void test_video_processor(void)
 
     hr = IMFAttributes_GetCount(attributes, &count);
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
-    todo_wine
+todo_wine
     ok(!!count, "Unexpected attribute count %u.\n", count);
 
     value = 0;
@@ -3485,14 +3442,14 @@ todo_wine {
     ok(hr == E_NOTIMPL, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetInputStatus(transform, 0, &flags);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetInputStreamAttributes(transform, 0, &attributes);
     ok(hr == E_NOTIMPL, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetOutputStatus(transform, &flags);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetOutputStreamAttributes(transform, 0, &attributes);
@@ -3504,27 +3461,27 @@ todo_wine {
     IMFAttributes_Release(attributes2);
 
     hr = IMFTransform_GetOutputAvailableType(transform, 0, 0, &media_type);
-    todo_wine
+todo_wine
     ok(hr == MF_E_NO_MORE_TYPES, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetInputCurrentType(transform, 0, &media_type);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetInputCurrentType(transform, 1, &media_type);
-    todo_wine
+todo_wine
     ok(hr == MF_E_INVALIDSTREAMNUMBER, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetOutputCurrentType(transform, 0, &media_type);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetOutputCurrentType(transform, 1, &media_type);
-    todo_wine
+todo_wine
     ok(hr == MF_E_INVALIDSTREAMNUMBER, "Unexpected hr %#x.\n", hr);
 
     hr = IMFTransform_GetInputStreamInfo(transform, 1, &input_info);
-    todo_wine
+todo_wine
     ok(hr == MF_E_INVALIDSTREAMNUMBER, "Unexpected hr %#x.\n", hr);
 
     memset(&input_info, 0xcc, sizeof(input_info));
@@ -3549,7 +3506,7 @@ todo_wine {
     {
         if (FAILED(hr = IMFTransform_GetInputAvailableType(transform, 0, i, &media_type)))
         {
-            todo_wine
+        todo_wine
             ok(hr == MF_E_NO_MORE_TYPES, "Unexpected hr %#x.\n", hr);
             break;
         }
@@ -3630,22 +3587,22 @@ todo_wine {
     ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
 
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
-    todo_wine
+todo_wine
     ok(hr == S_OK, "Failed to set input type, hr %#x.\n", hr);
 
     hr = IMFMediaType_SetGUID(media_type, &MF_MT_SUBTYPE, &MFVideoFormat_RGB32);
     ok(hr == S_OK, "Failed to set attribute, hr %#x.\n", hr);
 
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-    todo_wine
+todo_wine
     ok(hr == S_OK, "Failed to set output type, hr %#x.\n", hr);
 
     memset(&output_info, 0, sizeof(output_info));
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
-    todo_wine
+todo_wine
     ok(hr == S_OK, "Failed to get stream info, hr %#x.\n", hr);
     ok(output_info.dwFlags == 0, "Unexpected flags %#x.\n", output_info.dwFlags);
-    todo_wine
+todo_wine
     ok(output_info.cbSize > 0, "Unexpected size %u.\n", output_info.cbSize);
     ok(output_info.cbAlignment == 0, "Unexpected alignment %u.\n", output_info.cbAlignment);
 
@@ -3659,24 +3616,24 @@ todo_wine {
     output_buffer.pSample = sample;
     flags = 0;
     hr = IMFTransform_ProcessOutput(transform, 0, 1, &output_buffer, &flags);
-    todo_wine
+todo_wine
     ok(hr == MF_E_TRANSFORM_NEED_MORE_INPUT, "Unexpected hr %#x.\n", hr);
     ok(output_buffer.dwStatus == 0, "Unexpected buffer status, %#x.\n", output_buffer.dwStatus);
     ok(flags == 0, "Unexpected status %#x.\n", flags);
 
     hr = IMFTransform_ProcessInput(transform, 0, sample2, 0);
-    todo_wine
+todo_wine
     ok(hr == S_OK, "Failed to push a sample, hr %#x.\n", hr);
 
     hr = IMFTransform_ProcessInput(transform, 0, sample2, 0);
-    todo_wine
+todo_wine
     ok(hr == MF_E_NOTACCEPTING, "Unexpected hr %#x.\n", hr);
 
     memset(&output_buffer, 0, sizeof(output_buffer));
     output_buffer.pSample = sample;
     flags = 0;
     hr = IMFTransform_ProcessOutput(transform, 0, 1, &output_buffer, &flags);
-    todo_wine
+todo_wine
     ok(hr == MF_E_NO_SAMPLE_TIMESTAMP, "Unexpected hr %#x.\n", hr);
     ok(output_buffer.dwStatus == 0, "Unexpected buffer status, %#x.\n", output_buffer.dwStatus);
     ok(flags == 0, "Unexpected status %#x.\n", flags);
@@ -3687,7 +3644,7 @@ todo_wine {
     output_buffer.pSample = sample;
     flags = 0;
     hr = IMFTransform_ProcessOutput(transform, 0, 1, &output_buffer, &flags);
-    todo_wine
+todo_wine
     ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
     ok(output_buffer.dwStatus == 0, "Unexpected buffer status, %#x.\n", output_buffer.dwStatus);
     ok(flags == 0, "Unexpected status %#x.\n", flags);
@@ -3705,7 +3662,7 @@ todo_wine {
     output_buffer.pSample = sample;
     flags = 0;
     hr = IMFTransform_ProcessOutput(transform, 0, 1, &output_buffer, &flags);
-    todo_wine
+todo_wine
     ok(hr == S_OK || broken(FAILED(hr)) /* Win8 */, "Failed to get output buffer, hr %#x.\n", hr);
     ok(output_buffer.dwStatus == 0, "Unexpected buffer status, %#x.\n", output_buffer.dwStatus);
     ok(flags == 0, "Unexpected status %#x.\n", flags);
@@ -3885,7 +3842,7 @@ static void test_sar(void)
     ok(hr == S_OK, "Failed to create presentation clock, hr %#x.\n", hr);
 
     hr = IMFMediaSink_QueryInterface(sink, &IID_IMFPresentationTimeSource, (void **)&time_source);
-    todo_wine
+todo_wine
     ok(hr == S_OK, "Failed to get time source interface, hr %#x.\n", hr);
 
 if (SUCCEEDED(hr))
@@ -3968,7 +3925,7 @@ if (SUCCEEDED(hr))
     ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
 
     hr = IMFMediaSink_SetPresentationClock(sink, present_clock);
-    todo_wine
+todo_wine
     ok(hr == MF_E_CLOCK_NO_TIME_SOURCE, "Unexpected hr %#x.\n", hr);
 
     hr = MFCreateSystemTimeSource(&time_source);
@@ -4215,7 +4172,7 @@ if (SUCCEEDED(hr))
     ok(hr == S_OK, "Failed to activate, hr %#x.\n", hr);
 
     hr = IMFMediaSink_GetCharacteristics(sink, &flags);
-    todo_wine
+todo_wine
     ok(hr == MF_E_SHUTDOWN, "Unexpected hr %#x.\n", hr);
 
     IMFMediaSink_Release(sink);
@@ -4531,7 +4488,7 @@ todo_wine {
     /* Activate again. */
     hr = IMFActivate_ActivateObject(activate, &IID_IMFMediaSink, (void **)&sink2);
     ok(hr == S_OK, "Failed to activate, hr %#x.\n", hr);
-    todo_wine
+todo_wine
     ok(sink == sink2, "Unexpected instance.\n");
     IMFMediaSink_Release(sink2);
 
@@ -5835,15 +5792,19 @@ static void test_wma_decoder(void)
             &transform, &class_id))
         goto failed;
 
+    todo_wine
     check_interface(transform, &IID_IMediaObject, TRUE);
 
     /* check default media types */
 
     hr = IMFTransform_GetInputStreamInfo(transform, 0, &input_info);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetInputStreamInfo returned %#x\n", hr);
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputStreamInfo returned %#x\n", hr);
     hr = IMFTransform_GetOutputAvailableType(transform, 0, 0, &media_type);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputAvailableType returned %#x\n", hr);
 
     i = -1;
@@ -5869,6 +5830,7 @@ static void test_wma_decoder(void)
     ok(hr == S_OK, "MFCreateMediaType returned %#x\n", hr);
     init_media_type(media_type, output_type_desc, -1);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "SetOutputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
@@ -5878,25 +5840,31 @@ static void test_wma_decoder(void)
     hr = MFCreateMediaType(&media_type);
     ok(hr == S_OK, "MFCreateMediaType returned %#x\n", hr);
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetInputType returned %#x.\n", hr);
     init_media_type(media_type, input_type_desc, 1);
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetInputType returned %#x.\n", hr);
     init_media_type(media_type, input_type_desc, 2);
     for (i = 2; i < ARRAY_SIZE(input_type_desc) - 1; ++i)
     {
         hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+        todo_wine
         ok(hr == MF_E_INVALIDMEDIATYPE, "SetInputType returned %#x.\n", hr);
         init_media_type(media_type, input_type_desc, i + 1);
     }
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == S_OK, "SetInputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
 
     hr = IMFTransform_GetInputStreamInfo(transform, 0, &input_info);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetInputStreamInfo returned %#x\n", hr);
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputStreamInfo returned %#x\n", hr);
 
     /* check new output media types */
@@ -5911,7 +5879,9 @@ static void test_wma_decoder(void)
         ok(ret == 0, "Release returned %u\n", ret);
         winetest_pop_context();
     }
+    todo_wine
     ok(hr == MF_E_NO_MORE_TYPES, "GetOutputAvailableType returned %#x\n", hr);
+    todo_wine
     ok(i == 2, "%u output media types\n", i);
 
     /* check required output media type attributes */
@@ -5919,37 +5889,50 @@ static void test_wma_decoder(void)
     hr = MFCreateMediaType(&media_type);
     ok(hr == S_OK, "MFCreateMediaType returned %#x\n", hr);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetOutputType returned %#x.\n", hr);
     init_media_type(media_type, output_type_desc, 1);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetOutputType returned %#x.\n", hr);
     init_media_type(media_type, output_type_desc, 2);
     for (i = 2; i < ARRAY_SIZE(output_type_desc) - 1; ++i)
     {
         hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+        todo_wine
         ok(hr == MF_E_INVALIDMEDIATYPE, "SetOutputType returned %#x.\n", hr);
         init_media_type(media_type, output_type_desc, i + 1);
     }
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == S_OK, "SetOutputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
 
     memset(&input_info, 0xcd, sizeof(input_info));
     hr = IMFTransform_GetInputStreamInfo(transform, 0, &input_info);
+    todo_wine
     ok(hr == S_OK, "GetInputStreamInfo returned %#x\n", hr);
+    todo_wine
     ok(input_info.hnsMaxLatency == 0, "got hnsMaxLatency %s\n", wine_dbgstr_longlong(input_info.hnsMaxLatency));
+    todo_wine
     ok(input_info.dwFlags == 0, "got dwFlags %#x\n", input_info.dwFlags);
+    todo_wine
     ok(input_info.cbSize == wma_block_size, "got cbSize %u\n", input_info.cbSize);
+    todo_wine
     ok(input_info.cbMaxLookahead == 0, "got cbMaxLookahead %#x\n", input_info.cbMaxLookahead);
+    todo_wine
     ok(input_info.cbAlignment == 1, "got cbAlignment %#x\n", input_info.cbAlignment);
 
     memset(&output_info, 0xcd, sizeof(output_info));
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
+    todo_wine
     ok(hr == S_OK, "GetOutputStreamInfo returned %#x\n", hr);
+    todo_wine
     ok(output_info.dwFlags == 0, "got dwFlags %#x\n", output_info.dwFlags);
     todo_wine
     ok(output_info.cbSize == 0, "got cbSize %#x\n", output_info.cbSize);
+    todo_wine
     ok(output_info.cbAlignment == 1, "got cbAlignment %#x\n", output_info.cbAlignment);
 
     /* MF_MT_AUDIO_AVG_BYTES_PER_SECOND isn't required by SetInputType, but is needed for the transform to work */
@@ -5960,22 +5943,29 @@ static void test_wma_decoder(void)
     hr = IMFMediaType_SetUINT32(media_type, &MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 4003);
     ok(hr == S_OK, "SetUINT32 returned %#x\n", hr);
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == S_OK, "SetInputType returned %#x.\n", hr);
 
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
+    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputStreamInfo returned %#x\n", hr);
 
     init_media_type(media_type, output_type_desc, -1);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+    todo_wine
     ok(hr == S_OK, "SetInputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
 
     memset(&output_info, 0xcd, sizeof(output_info));
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
+    todo_wine
     ok(hr == S_OK, "GetOutputStreamInfo returned %#x\n", hr);
+    todo_wine
     ok(output_info.dwFlags == 0, "got dwFlags %#x\n", output_info.dwFlags);
+    todo_wine
     ok(output_info.cbSize == sizeof(wma_decoded_data), "got cbSize %#x\n", output_info.cbSize);
+    todo_wine
     ok(output_info.cbAlignment == 1, "got cbAlignment %#x\n", output_info.cbAlignment);
 
     /* resource is generated using test_wma_encoder output file */
@@ -6169,7 +6159,6 @@ START_TEST(mf)
     test_MFGetService();
     test_sequencer_source();
     test_media_session();
-    test_media_session_rate_control();
     test_MFShutdownObject();
     test_presentation_clock();
     test_sample_grabber();
