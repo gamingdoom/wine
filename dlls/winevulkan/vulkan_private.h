@@ -63,6 +63,56 @@ struct VkDevice_T
     struct VkQueue_T* queues;
     uint32_t queue_count;
 
+    VkQueueFamilyProperties *queue_props;
+
+    struct wine_vk_mapping mapping;
+};
+
+struct fs_hack_image
+{
+    uint32_t cmd_queue_idx;
+    VkCommandBuffer cmd;
+    VkImage swapchain_image;
+    VkImage fsr_image;
+    VkImage user_image;
+    VkSemaphore blit_finished;
+    VkImageView user_view, swapchain_view, fsr_view;
+    VkDescriptorSet descriptor_set, fsr_set;
+};
+
+struct fs_comp_pipeline
+{
+    VkPipelineLayout pipeline_layout;
+    VkPipeline pipeline;
+    uint32_t push_size;
+};
+
+struct VkSwapchainKHR_T
+{
+    VkSwapchainKHR swapchain; /* native swapchain */
+
+    /* fs hack data below */
+    BOOL fs_hack_enabled;
+    VkExtent2D user_extent;
+    VkExtent2D real_extent;
+    VkImageUsageFlags surface_usage;
+    VkRect2D blit_dst;
+    VkCommandPool *cmd_pools; /* VkCommandPool[device->queue_count] */
+    VkDeviceMemory user_image_memory, fsr_image_memory;
+    uint32_t n_images;
+    struct fs_hack_image *fs_hack_images; /* struct fs_hack_image[n_images] */
+    VkFilter fs_hack_filter;
+    VkSampler sampler;
+    VkDescriptorPool descriptor_pool;
+    VkDescriptorSetLayout descriptor_set_layout;
+    VkFormat format;
+    BOOL fsr;
+    float sharpness;
+
+    struct fs_comp_pipeline blit_pipeline;
+    struct fs_comp_pipeline fsr_easu_pipeline;
+    struct fs_comp_pipeline fsr_rcas_pipeline;
+
     struct wine_vk_mapping mapping;
 };
 
@@ -204,6 +254,30 @@ static inline VkSurfaceKHR wine_surface_to_handle(struct wine_surface *surface)
     return (VkSurfaceKHR)(uintptr_t)surface;
 }
 
+struct wine_dev_mem
+{
+    VkDeviceMemory dev_mem;
+
+    VkExternalMemoryHandleTypeFlagBits handle_types;
+
+    BOOL inherit;
+    DWORD access;
+
+    HANDLE handle;
+
+    struct wine_vk_mapping mapping;
+};
+
+static inline struct wine_dev_mem *wine_dev_mem_from_handle(VkDeviceMemory handle)
+{
+    return (struct wine_dev_mem *)(uintptr_t)handle;
+}
+
+static inline VkDeviceMemory wine_dev_mem_to_handle(struct wine_dev_mem *dev_mem)
+{
+    return (VkDeviceMemory)(uintptr_t)dev_mem;
+}
+
 BOOL wine_vk_device_extension_supported(const char *name) DECLSPEC_HIDDEN;
 BOOL wine_vk_instance_extension_supported(const char *name) DECLSPEC_HIDDEN;
 
@@ -216,5 +290,23 @@ extern const struct unix_funcs loader_funcs;
 
 BOOL WINAPI wine_vk_is_available_instance_function(VkInstance instance, const char *name) DECLSPEC_HIDDEN;
 BOOL WINAPI wine_vk_is_available_device_function(VkDevice device, const char *name) DECLSPEC_HIDDEN;
+
+extern VkDevice WINAPI __wine_get_native_VkDevice(VkDevice device) DECLSPEC_HIDDEN;
+extern VkInstance WINAPI __wine_get_native_VkInstance(VkInstance instance) DECLSPEC_HIDDEN;
+extern VkPhysicalDevice WINAPI __wine_get_native_VkPhysicalDevice(VkPhysicalDevice phys_dev) DECLSPEC_HIDDEN;
+extern VkQueue WINAPI __wine_get_native_VkQueue(VkQueue queue) DECLSPEC_HIDDEN;
+extern VkPhysicalDevice WINAPI __wine_get_wrapped_VkPhysicalDevice(VkInstance instance, VkPhysicalDevice native_phys_dev) DECLSPEC_HIDDEN;
+
+extern VkResult WINAPI __wine_create_vk_instance_with_callback(const VkInstanceCreateInfo *create_info, const VkAllocationCallbacks *allocator,
+        VkInstance *instance, PFN_native_vkCreateInstance callback, void *context) DECLSPEC_HIDDEN;
+extern VkResult WINAPI __wine_create_vk_device_with_callback(VkPhysicalDevice phys_dev, const VkDeviceCreateInfo *create_info,
+        const VkAllocationCallbacks *allocator, VkDevice *device, PFN_native_vkCreateDevice callback, void *context) DECLSPEC_HIDDEN;
+
+static inline void init_unicode_string( UNICODE_STRING *str, const WCHAR *data )
+{
+    str->Length = lstrlenW(data) * sizeof(WCHAR);
+    str->MaximumLength = str->Length + sizeof(WCHAR);
+    str->Buffer = (WCHAR *)data;
+}
 
 #endif /* __WINE_VULKAN_PRIVATE_H */
